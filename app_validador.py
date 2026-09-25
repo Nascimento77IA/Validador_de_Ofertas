@@ -59,7 +59,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas CRM - Nagumo/BWCA")
+st.title("📝 Validador de Ofertas")
 st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. *Mixter (Em Projeto)*")
 
 # --- INTERFACE DO USUÁRIO ---
