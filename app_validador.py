@@ -41,10 +41,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas CRM (Versão 2.3)")
-st.markdown("Validação estruturada de preços por PLU com suporte a cabeçalhos duplos (SP / Rio).")
+st.title("📝 Validador de Ofertas CRM (Versão 2.4)")
+st.markdown("Validação estruturada de preços por PLU com busca inteligente invertida (Excel ➔ HTML).")
 
-# --- INTERFACE DO USUÁRIO ---
+# --- INTERFACE DO UTILIZADOR ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
 
 col1, col2 = st.columns(2)
@@ -55,7 +55,7 @@ with col2:
 
 if st.button("🔍 Validar Preços"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("Analisando cabeçalhos duplos e cruzando PLUs..."):
+        with st.spinner("A analisar a planilha e a cruzar com o HTML..."):
             
             arquivo_excel.seek(0)
             
@@ -69,7 +69,6 @@ if st.button("🔍 Validar Preços"):
             linha_plu_idx = -1
             aba_encontrada = ""
             
-            # Procura a linha que contém o PLU nas primeiras 20 linhas de qualquer aba
             for nome_aba, df_aba in todas_abas.items():
                 for i, row in df_aba.head(20).iterrows():
                     row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
@@ -87,9 +86,9 @@ if st.button("🔍 Validar Preços"):
                 
             st.info(f"✅ Cabeçalho detetado na aba: **{aba_encontrada}** (Linha do PLU: {linha_plu_idx + 1})")
                 
-            # Tratamento do cabeçalho duplo (Linha do PLU + Linha dos Preços logo abaixo)
-            row_main = df_raw.iloc[linha_plu_idx].values       # Ex: PLU, PRODUTO, NAGUMO SP, NAGUMO RIO
-            row_sub = df_raw.iloc[linha_plu_idx + 1].values    # Ex: PREÇO, OFERTA, PREÇO, OFERTA
+            # Tratamento do cabeçalho duplo
+            row_main = df_raw.iloc[linha_plu_idx].values
+            row_sub = df_raw.iloc[linha_plu_idx + 1].values
             
             col_plu_idx = -1
             sp_preco_idx = -1; sp_oferta_idx = -1; sp_cartao_idx = -1
@@ -97,7 +96,6 @@ if st.button("🔍 Validar Preços"):
             
             current_cluster = ""
             for i in range(len(row_main)):
-                # Atualiza o cluster atual se houver indicação na linha principal
                 if pd.notna(row_main[i]):
                     val_main = str(row_main[i]).upper()
                     if "PLU" in val_main:
@@ -105,7 +103,6 @@ if st.button("🔍 Validar Preços"):
                     elif "NAGUMO" in val_main:
                         current_cluster = val_main
                 
-                # Lê a sub-coluna (preço, oferta, etc.)
                 sub_val = str(row_sub[i]).upper() if pd.notna(row_sub[i]) else ""
                 
                 if "NAGUMO SP" in current_cluster:
@@ -124,7 +121,6 @@ if st.button("🔍 Validar Preços"):
                     elif "CART" in sub_val or "MEU NAGUMO" in sub_val:
                         rio_cartao_idx = i
 
-            # Define os índices baseando-se na escolha feita pelo usuário no ecrã
             if cluster == "Lojas (SP)":
                 idx_preco = sp_preco_idx
                 idx_oferta = sp_oferta_idx
@@ -134,7 +130,6 @@ if st.button("🔍 Validar Preços"):
                 idx_oferta = rio_oferta_idx
                 idx_cartao = rio_cartao_idx
 
-            # O conteúdo começa duas linhas abaixo do PLU (pulando a linha principal e a sub-linha de preços)
             df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
 
             # Mapeamento do Excel por PLU
@@ -147,36 +142,50 @@ if st.button("🔍 Validar Preços"):
                 if not plu_limpo:
                     continue
                 
+                nome_produto = str(row.iloc[col_plu_idx + 1]) if col_plu_idx + 1 < len(row) else "Produto"
                 de_val = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 and idx_preco < len(row) else None
                 of_val = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 and idx_oferta < len(row) else None
                 ca_val = limpar_preco(row.iloc[idx_cartao]) if idx_cartao != -1 and idx_cartao < len(row) else None
                 
                 mapa_excel[plu_limpo] = {
+                    'nome': nome_produto,
                     'de': de_val,
                     'oferta': of_val,
                     'cartao': ca_val
                 }
 
-            # --- LER HTML ---
+            # --- LER HTML E FAZER BUSCA INTELIGENTE ---
             arquivo_html.seek(0)
             html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            produtos_html = []
-            links_com_plu = soup.find_all(id=True)
+            erros = []
+            alertas = []
+            validados_count = 0
             
-            ids_processados = set()
-            for el in links_com_plu:
-                plu_html = limpar_plu(el.get('id'))
-                if not plu_html or plu_html in ids_processados:
+            # Abordagem inteligente: Para cada PLU da planilha, procuramos o bloco correspondente no HTML
+            for plu_h, dados_excel in mapa_excel.items():
+                nome_h = dados_excel['nome']
+                
+                # Tenta encontrar o elemento no HTML por ID direto ou atributo data-plu
+                el = soup.find(id=plu_h) or soup.find(attrs={"data-plu": plu_h})
+                
+                # Se não encontrar por correspondência exata, procura qualquer elemento cujo ID contenha o PLU
+                if not el:
+                    for tag in soup.find_all(id=True):
+                        if plu_h in str(tag.get('id')):
+                            el = tag
+                            break
+                            
+                if not el:
+                    alertas.append(f"⚠️ **PLU {plu_h} ({nome_h})** presente na planilha **não foi encontrado** no código HTML.")
                     continue
-                
-                ids_processados.add(plu_html)
-                nome_prod_html = el.get('title', el.get_text(strip=True)[:40] or 'Produto no HTML')
-                
+                    
+                validados_count += 1
                 container_pai = el.find_parent('table') or el.find_parent('td') or el
                 html_item_str = str(container_pai)
 
+                # Extração de preços do bloco HTML encontrado
                 m_de = re.search(r'DE\s*R\$\s*([\d,]+)', html_item_str)
                 de_preco = float(m_de.group(1).replace(',', '.')) if m_de else None
 
@@ -190,50 +199,28 @@ if st.button("🔍 Validar Preços"):
                     m_card = re.search(r'Preço Exclusivo.*?R\$\s*([\d,]+)', html_item_str, re.DOTALL)
                 cartao_preco = float(m_card.group(1).replace(',', '.')) if m_card else None
 
-                produtos_html.append({
-                    'plu': plu_html,
-                    'nome': nome_prod_html,
-                    'de': de_preco,
-                    'oferta': oferta_preco,
-                    'cartao': cartao_preco
-                })
+                # Comparação rigorosa
+                if de_preco is not None and dados_excel['de'] is not None and abs(de_preco - dados_excel['de']) > 0.01:
+                    erros.append(f"**ERRO PREÇO (DE)** | {nome_h} (PLU: {plu_h}) | HTML: R${de_preco:.2f} | Excel: R${dados_excel['de']:.2f}")
+                
+                if oferta_preco is not None and dados_excel['oferta'] is not None and abs(oferta_preco - dados_excel['oferta']) > 0.01:
+                    erros.append(f"**ERRO OFERTA** | {nome_h} (PLU: {plu_h}) | HTML: R${oferta_preco:.2f} | Excel: R${dados_excel['oferta']:.2f}")
+                
+                if cartao_preco is not None:
+                    if dados_excel['cartao'] is not None:
+                        if abs(cartao_preco - dados_excel['cartao']) > 0.01:
+                            erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML: R${cartao_preco:.2f} | Excel: R${dados_excel['cartao']:.2f}")
+                    else:
+                        erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML tem Cartão (R${cartao_preco:.2f}), mas no Excel está vazio.")
 
-            # --- CRUZAMENTO E VALIDAÇÃO ---
+            # --- EXIBIÇÃO DOS RESULTADOS ---
             st.markdown("### Resultados da Validação (Por PLU)")
             
-            erros = []
-            alertas = []
-            validados_count = 0
-
-            for p_html in produtos_html:
-                plu_h = p_html['plu']
-                nome_h = p_html['nome']
-                
-                if plu_h in mapa_excel:
-                    dados_excel = mapa_excel[plu_h]
-                    validados_count += 1
-                    
-                    if p_html['de'] is not None and dados_excel['de'] is not None and abs(p_html['de'] - dados_excel['de']) > 0.01:
-                        erros.append(f"**ERRO PREÇO (DE)** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['de']:.2f} | Excel: R${dados_excel['de']:.2f}")
-                    
-                    if p_html['oferta'] is not None and dados_excel['oferta'] is not None and abs(p_html['oferta'] - dados_excel['oferta']) > 0.01:
-                        erros.append(f"**ERRO OFERTA** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['oferta']:.2f} | Excel: R${dados_excel['oferta']:.2f}")
-                    
-                    if p_html['cartao'] is not None:
-                        if dados_excel['cartao'] is not None:
-                            if abs(p_html['cartao'] - dados_excel['cartao']) > 0.01:
-                                erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['cartao']:.2f} | Excel: R${dados_excel['cartao']:.2f}")
-                        else:
-                            erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML tem Cartão (R${p_html['cartao']:.2f}), mas no Excel está vazio.")
-                else:
-                    alertas.append(f"⚠️ **PLU {plu_h} não encontrado:** O HTML pediu o PLU {plu_h}, mas ele não está na planilha.")
-
-            # --- EXIBIÇÃO ---
             if validados_count == 0:
-                st.warning("⚠️ Nenhum PLU bateu. Confirme se os IDs estão corretos nas tags do HTML.")
+                st.warning("⚠️ Nenhum PLU da planilha foi localizado no HTML. Certifique-se de que os IDs inseridos no HTML correspondem aos números dos PLUs (ex: `id='788274'`).")
             else:
                 if not erros and not alertas:
-                    st.success(f"✅ Perfeito! Todos os {validados_count} produtos batem rigorosamente com o Excel para o cluster **{cluster}**.")
+                    st.success(f"✅ Perfeito! Todos os {validados_count} produtos encontrados batem rigorosamente com o Excel para o cluster **{cluster}**.")
                 
                 for e in erros:
                     st.error(e)
