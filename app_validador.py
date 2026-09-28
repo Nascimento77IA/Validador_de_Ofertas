@@ -36,7 +36,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador de Ofertas & Injetor de PLU - Nagumo", layout="wide", page_icon="📝")
+st.set_page_config(page_title="Validador de Ofertas - Nagumo", layout="wide", page_icon="📝")
 
 st.markdown("""
     <style>
