@@ -41,8 +41,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Título alterado para 2.1 para confirmar a atualização
-st.title("📝 Validador de Ofertas CRM (Versão 2.1)")
+# SE O TÍTULO NÃO MUDAR, O FICHEIRO NÃO FOI GRAVADO CORRETAMENTE!
+st.title("📝 Validador de Ofertas CRM (Versão 2.2)")
 st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. Validação 100% ancorada pelo PLU.")
 
 # --- INTERFACE DO USUÁRIO ---
@@ -58,37 +58,45 @@ if st.button("🔍 Validar Preços"):
     if arquivo_excel and arquivo_html:
         with st.spinner("Analisando e cruzando PLUs..."):
             
-            # --- LER EXCEL ---
+            # Reposicionar o ponteiro do ficheiro para a linha zero (evita ficheiros vazios)
+            arquivo_excel.seek(0)
+            
+            # --- LER EXCEL (Modo Universal) ---
             try:
-                xls = pd.ExcelFile(arquivo_excel)
+                todas_abas = pd.read_excel(arquivo_excel, sheet_name=None, header=None)
             except Exception as e:
-                st.error(f"Erro ao ler o arquivo Excel: {e}")
+                st.error(f"Erro grave ao ler o arquivo Excel: {e}")
                 st.stop()
                 
             df_raw = None
             linha_cab = -1
             aba_encontrada = ""
             
-            # 1. Procura em todas as abas (sheets) pelo cabeçalho correto
-            for sheet in xls.sheet_names:
-                df_temp = pd.read_excel(xls, sheet_name=sheet, header=None)
-                for i, row in df_temp.head(30).iterrows(): # Busca nas 30 primeiras linhas de cada aba
-                    row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
-                    if 'PLU' in row_str and 'OFERTA' in row_str:
+            # Procura em todas as abas lidas
+            for nome_aba, df_aba in todas_abas.items():
+                for i, row in df_aba.head(30).iterrows():
+                    # Junta a linha toda num grande texto, ignorando Maiúsculas/Minúsculas
+                    valores_linha = " ".join([str(x).upper() for x in row.values])
+                    
+                    if 'PLU' in valores_linha and 'OFERTA' in valores_linha:
                         linha_cab = i
-                        df_raw = df_temp
-                        aba_encontrada = sheet
+                        df_raw = df_aba
+                        aba_encontrada = nome_aba
                         break
-                if df_raw is not None:
+                if linha_cab != -1:
                     break
                     
+            # MODO RAIO-X: Se falhar, mostra a tabela no ecrã para despiste
             if df_raw is None or linha_cab == -1:
-                st.error("Erro: Não achei o cabeçalho com as palavras 'PLU' e 'OFERTA' em NENHUMA aba da planilha. Verifique a formatação do Excel.")
+                st.error("❌ Erro: Não achei o cabeçalho com as palavras 'PLU' e 'OFERTA' na planilha.")
+                st.warning("Veja abaixo o que o sistema conseguiu ler da primeira aba do seu arquivo. Será que as colunas mudaram de nome? (Ex: 'CÓDIGO' em vez de 'PLU')")
+                primeira_aba_valores = list(todas_abas.values())[0]
+                st.dataframe(primeira_aba_valores.head(15))
                 st.stop()
                 
-            st.info(f"✅ Cabeçalho encontrado automaticamente na aba: **{aba_encontrada}** (Linha {linha_cab + 1})")
+            st.info(f"✅ Cabeçalho encontrado na aba: **{aba_encontrada}** (Linha {linha_cab + 1})")
                 
-            # 2. Mapear colunas SP vs RIO de forma dinâmica
+            # Mapear colunas SP vs RIO de forma dinâmica
             columns = df_raw.iloc[linha_cab].fillna("").astype(str).str.upper().str.strip()
             df_excel = df_raw.iloc[linha_cab+1:].reset_index(drop=True)
             
@@ -114,7 +122,7 @@ if st.button("🔍 Validar Preços"):
                     elif cartao_count == 1: rio_cartao_idx = i
                     cartao_count += 1
                         
-            # Selecionar as colunas corretas baseado na escolha do usuário
+            # Selecionar as colunas corretas baseado no cluster
             if cluster == "Lojas (SP)":
                 idx_preco = sp_preco_idx
                 idx_oferta = sp_oferta_idx
@@ -124,7 +132,7 @@ if st.button("🔍 Validar Preços"):
                 idx_oferta = rio_oferta_idx
                 idx_cartao = rio_cartao_idx
 
-            # 3. Guardar os dados do Excel
+            # Guardar os dados do Excel num dicionário
             mapa_excel = {}
             for _, row in df_excel.iterrows():
                 if col_plu_idx == -1 or pd.isna(row.iloc[col_plu_idx]):
@@ -145,6 +153,7 @@ if st.button("🔍 Validar Preços"):
                 }
 
             # --- LER HTML ---
+            arquivo_html.seek(0)
             html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
             soup = BeautifulSoup(html_content, 'html.parser')
             
