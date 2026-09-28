@@ -26,12 +26,18 @@ def limpar_texto(texto):
         return ""
     texto = texto.lower()
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
+    
+    # SEPARA LETRAS DE NÚMEROS (ex: OVOS500G vira OVOS 500 G)
+    texto = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', texto)
+    texto = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', texto)
+
     substituicoes = {
         r'\brefr\.': 'refrigerante ', r'\bcerv\.': 'cerveja ', r'\bsabon\.': 'sabonete ',
-        r'\bmolho tom\.': 'molho de tomate ', r'\bmac\.': 'macarrao ', r'\blv\.': 'longa vida ',
+        r'\bmolho tom\.': 'molho de tomate ', r'\bmac\b|\bmac\.': 'macarrao ', r'\blv\.': 'longa vida ',
         r'\bref\.': 'refinado ', r'\bcond\.': 'condensado ', r'\btrad\.': 'tradicional ',
         r'\bsac\.': 'sache ', r'\bcg\.': 'congelada ', r'\blava r\.po\b': 'lava roupas em po ',
         r'\bguar\.': 'guarana ', r'\b1lt\b': '1l', r'\b2lt\b': '2l', r'\blt\b': 'lata ',
+        r'\bc/': 'com ', r'\bc\\': 'com ', 
         r'pet': '', r'sachet': 'sache', r'pouch': '', r'\bunids?\.?': '',
     }
     for padrao, subst in substituicoes.items():
@@ -42,7 +48,6 @@ def limpar_texto(texto):
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Validador de Ofertas", layout="wide")
 
-# Injeção de CSS para a fonte Nunito Sans ExtraBold (protegendo os ícones)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,800&display=swap');
@@ -59,11 +64,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas")
-st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. *Mixter (Em Projeto)*")
+st.title("📝 Validador de Ofertas CRM - Nagumo/BWCA")
+st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio.")
 
 # --- INTERFACE DO USUÁRIO ---
-# Removido o Mixter das opções ativas do selectbox
 praca_escolhida = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"]).lower()
 
 col1, col2 = st.columns(2)
@@ -83,7 +87,6 @@ if st.button("🔍 Validar Preços"):
         # ==========================================
         df_excel = pd.read_excel(arquivo_excel, header=None)
         
-        # Como só temos SP e Rio, a lógica fica direta e sem riscos
         if "sp" in praca_escolhida or "lojas" in praca_escolhida:
             praca_str = "NAGUMO SP"
         else:
@@ -174,7 +177,7 @@ if st.button("🔍 Validar Preços"):
             produtos_html.append({'nome_original': nome, 'nome_limpo': limpar_texto(nome), 'de': de_preco, 'oferta': oferta_preco, 'cartao': cartao_preco})
 
         # ==========================================
-        # CRUZAMENTO E VALIDAÇÃO
+        # NOVO CRUZAMENTO (Lógica Imbatível)
         # ==========================================
         erros = []
         alertas = []
@@ -187,30 +190,40 @@ if st.button("🔍 Validar Preços"):
             if chave_h in mapa_excel:
                 dados_excel = mapa_excel[chave_h]
             else:
-                melhor_score = 0
-                palavras_h = set(w for w in chave_h.split() if len(w) > 2)
-                for k_excel, v_excel in mapa_excel.items():
-                    comuns = palavras_h.intersection(set(w for w in k_excel.split() if len(w) > 2))
-                    if len(comuns) > melhor_score and len(comuns) >= 2:
-                        melhor_score = len(comuns)
-                        dados_excel = v_excel
+                melhor_score = -999
+                melhor_chave = None
+                
+                palavras_h_set = set(chave_h.split())
+                
+                for k_excel in mapa_excel.keys():
+                    palavras_e = k_excel.split()
+                    
+                    # 1. Conta quantas palavras o Excel e o HTML têm em comum
+                    pontos = len(set(palavras_e).intersection(palavras_h_set))
+                    
+                    # 2. Penaliza severamente palavras grandes (marcas) do Excel que não estejam no HTML
+                    for p in palavras_e:
+                        if len(p) > 3 and p not in palavras_h_set:
+                            pontos -= 4
+                            
+                    if pontos > melhor_score:
+                        melhor_score = pontos
+                        melhor_chave = k_excel
                         
-                if not dados_excel:
-                    match = difflib.get_close_matches(chave_h, list(mapa_excel.keys()), n=1, cutoff=0.2)
-                    if match:
-                        dados_excel = mapa_excel[match[0]]
+                if melhor_chave and melhor_score > 0:
+                    dados_excel = mapa_excel[melhor_chave]
 
             if dados_excel:
                 if p_html['de'] is not None and dados_excel['de'] is not None and abs(p_html['de'] - dados_excel['de']) > 0.01:
-                    erros.append(f"**ERRO PREÇO (DE)** | {nome_h} | HTML: R\${p_html['de']:.2f} | Excel: R\${dados_excel['de']:.2f}")
+                    erros.append(f"**ERRO PREÇO (DE)** | {nome_h} | HTML: R${p_html['de']:.2f} | Excel: R${dados_excel['de']:.2f}")
                 if p_html['oferta'] is not None and dados_excel['oferta'] is not None and abs(p_html['oferta'] - dados_excel['oferta']) > 0.01:
-                    erros.append(f"**ERRO OFERTA** | {nome_h} | HTML: R\${p_html['oferta']:.2f} | Excel: R\${dados_excel['oferta']:.2f}")
+                    erros.append(f"**ERRO OFERTA** | {nome_h} | HTML: R${p_html['oferta']:.2f} | Excel: R${dados_excel['oferta']:.2f}")
                 if p_html['cartao'] is not None:
                     if dados_excel['cartao'] is not None:
                         if abs(p_html['cartao'] - dados_excel['cartao']) > 0.01:
-                            erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML: R\${p_html['cartao']:.2f} | Excel: R\${dados_excel['cartao']:.2f}")
+                            erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML: R${p_html['cartao']:.2f} | Excel: R${dados_excel['cartao']:.2f}")
                     else:
-                        erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML tem Cartão (R\${p_html['cartao']:.2f}), mas no Excel está vazio.")
+                        erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML tem Cartão (R${p_html['cartao']:.2f}), mas no Excel está vazio.")
             else:
                 alertas.append(f"Produto do HTML **'{nome_h}'** não encontrou correspondência no Excel.")
 
