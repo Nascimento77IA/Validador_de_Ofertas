@@ -41,8 +41,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# SE O TÍTULO ABAIXO NÃO APARECER NA SUA TELA, O ARQUIVO NÃO FOI SALVO!
-st.title("📝 Validador de Ofertas CRM (Versão 2.0)")
+# Título alterado para 2.1 para confirmar a atualização
+st.title("📝 Validador de Ofertas CRM (Versão 2.1)")
 st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. Validação 100% ancorada pelo PLU.")
 
 # --- INTERFACE DO USUÁRIO ---
@@ -59,19 +59,34 @@ if st.button("🔍 Validar Preços"):
         with st.spinner("Analisando e cruzando PLUs..."):
             
             # --- LER EXCEL ---
-            df_raw = pd.read_excel(arquivo_excel, header=None)
-            
-            # 1. Achar o cabeçalho correto automaticamente
+            try:
+                xls = pd.ExcelFile(arquivo_excel)
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo Excel: {e}")
+                st.stop()
+                
+            df_raw = None
             linha_cab = -1
-            for i, row in df_raw.iterrows():
-                row_str = " ".join([str(x).upper() for x in row.values])
-                if 'PLU' in row_str and 'PRE' in row_str and 'OFERTA' in row_str:
-                    linha_cab = i
+            aba_encontrada = ""
+            
+            # 1. Procura em todas as abas (sheets) pelo cabeçalho correto
+            for sheet in xls.sheet_names:
+                df_temp = pd.read_excel(xls, sheet_name=sheet, header=None)
+                for i, row in df_temp.head(30).iterrows(): # Busca nas 30 primeiras linhas de cada aba
+                    row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+                    if 'PLU' in row_str and 'OFERTA' in row_str:
+                        linha_cab = i
+                        df_raw = df_temp
+                        aba_encontrada = sheet
+                        break
+                if df_raw is not None:
                     break
                     
-            if linha_cab == -1:
-                st.error("Erro: Não achei o cabeçalho com PLU, PREÇO e OFERTA na planilha.")
+            if df_raw is None or linha_cab == -1:
+                st.error("Erro: Não achei o cabeçalho com as palavras 'PLU' e 'OFERTA' em NENHUMA aba da planilha. Verifique a formatação do Excel.")
                 st.stop()
+                
+            st.info(f"✅ Cabeçalho encontrado automaticamente na aba: **{aba_encontrada}** (Linha {linha_cab + 1})")
                 
             # 2. Mapear colunas SP vs RIO de forma dinâmica
             columns = df_raw.iloc[linha_cab].fillna("").astype(str).str.upper().str.strip()
