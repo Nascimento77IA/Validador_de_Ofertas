@@ -41,8 +41,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas CRM (Versão 2.4)")
-st.markdown("Validação estruturada de preços por PLU com busca inteligente invertida (Excel ➔ HTML).")
+st.title("📝 Validador de Ofertas CRM (Versão 2.5)")
+st.markdown("Validação automática por PLU com deteção inteligente de texto no HTML (Sem necessidade de IDs manuais).")
 
 # --- INTERFACE DO UTILIZADOR ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
@@ -55,7 +55,7 @@ with col2:
 
 if st.button("🔍 Validar Preços"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("A analisar a planilha e a cruzar com o HTML..."):
+        with st.spinner("A analisar a planilha e a procurar os PLUs no HTML..."):
             
             arquivo_excel.seek(0)
             
@@ -154,7 +154,7 @@ if st.button("🔍 Validar Preços"):
                     'cartao': ca_val
                 }
 
-            # --- LER HTML E FAZER BUSCA INTELIGENTE ---
+            # --- LER HTML E FAZER BUSCA INTELIGENTE POR TEXTO ---
             arquivo_html.seek(0)
             html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
             soup = BeautifulSoup(html_content, 'html.parser')
@@ -163,27 +163,30 @@ if st.button("🔍 Validar Preços"):
             alertas = []
             validados_count = 0
             
-            # Abordagem inteligente: Para cada PLU da planilha, procuramos o bloco correspondente no HTML
             for plu_h, dados_excel in mapa_excel.items():
                 nome_h = dados_excel['nome']
                 
-                # Tenta encontrar o elemento no HTML por ID direto ou atributo data-plu
+                # Procura elemento por ID, atributo ou texto correspondente ao PLU
                 el = soup.find(id=plu_h) or soup.find(attrs={"data-plu": plu_h})
                 
-                # Se não encontrar por correspondência exata, procura qualquer elemento cujo ID contenha o PLU
                 if not el:
-                    for tag in soup.find_all(id=True):
-                        if plu_h in str(tag.get('id')):
-                            el = tag
+                    # Busca avançada: Procura em tabelas ou células onde o número do PLU apareça como texto
+                    for table in soup.find_all(['table', 'td', 'div']):
+                        if plu_h in table.get_text():
+                            el = table
+                            # Tenta afunilar para a sub-tabela mais específica se existir
+                            sub_tables = table.find_all('table')
+                            for st_t in sub_tables:
+                                if plu_h in st_t.get_text():
+                                    el = st_t
                             break
                             
                 if not el:
-                    alertas.append(f"⚠️ **PLU {plu_h} ({nome_h})** presente na planilha **não foi encontrado** no código HTML.")
+                    alertas.append(f"⚠️ **PLU {plu_h} ({nome_h})** não foi localizado no HTML.")
                     continue
                     
                 validados_count += 1
-                container_pai = el.find_parent('table') or el.find_parent('td') or el
-                html_item_str = str(container_pai)
+                html_item_str = str(el)
 
                 # Extração de preços do bloco HTML encontrado
                 m_de = re.search(r'DE\s*R\$\s*([\d,]+)', html_item_str)
@@ -199,7 +202,7 @@ if st.button("🔍 Validar Preços"):
                     m_card = re.search(r'Preço Exclusivo.*?R\$\s*([\d,]+)', html_item_str, re.DOTALL)
                 cartao_preco = float(m_card.group(1).replace(',', '.')) if m_card else None
 
-                # Comparação rigorosa
+                # Comparação rigorosa de preços
                 if de_preco is not None and dados_excel['de'] is not None and abs(de_preco - dados_excel['de']) > 0.01:
                     erros.append(f"**ERRO PREÇO (DE)** | {nome_h} (PLU: {plu_h}) | HTML: R${de_preco:.2f} | Excel: R${dados_excel['de']:.2f}")
                 
@@ -217,7 +220,7 @@ if st.button("🔍 Validar Preços"):
             st.markdown("### Resultados da Validação (Por PLU)")
             
             if validados_count == 0:
-                st.warning("⚠️ Nenhum PLU da planilha foi localizado no HTML. Certifique-se de que os IDs inseridos no HTML correspondem aos números dos PLUs (ex: `id='788274'`).")
+                st.warning("⚠️ Nenhum PLU foi encontrado no HTML. Verifique se os números dos códigos constam nos ficheiros HTML.")
             else:
                 if not erros and not alertas:
                     st.success(f"✅ Perfeito! Todos os {validados_count} produtos encontrados batem rigorosamente com o Excel para o cluster **{cluster}**.")
