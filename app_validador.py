@@ -36,7 +36,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador e Injetor de PLU - Nagumo", layout="wide", page_icon="📝")
+st.set_page_config(page_title="Validador de Ofertas & Injetor de PLU - Nagumo", layout="wide", page_icon="📝")
 
 st.markdown("""
     <style>
@@ -50,9 +50,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📝 Validador de Ofertas & Injetor de PLU - Nagumo")
-st.markdown("Validação detalhada item a item cruzando a planilha com o HTML.")
+st.markdown("Validação 100% abrangente: analisa todos os itens da planilha e cruza com o HTML.")
 
-# --- INTERFACE DO USUÁRIO ---
+# --- INTERFACE DO UTILIZADOR ---
 cluster = st.selectbox("1. Qual cluster você deseja validar/processar?", ["Lojas (SP)", "Rio"])
 
 col1, col2 = st.columns(2)
@@ -63,7 +63,7 @@ with col2:
 
 if st.button("🚀 Executar Validação Completa"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("Analisando e validando item a item..."):
+        with st.spinner("A analisar todos os itens da planilha..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -123,7 +123,8 @@ if st.button("🚀 Executar Validação Completa"):
 
             df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
 
-            mapa_excel = {}
+            # Lista ordenada com TODOS os itens da planilha
+            itens_planilha = []
             for _, row in df_excel.iterrows():
                 if col_plu_idx == -1 or col_plu_idx >= len(row) or pd.isna(row.iloc[col_plu_idx]):
                     continue
@@ -131,18 +132,16 @@ if st.button("🚀 Executar Validação Completa"):
                 if not plu: 
                     continue
                 
-                nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else ""
+                nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else "Produto"
                 de = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 and idx_preco < len(row) else None
                 oferta = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 and idx_oferta < len(row) else None
                 
-                chave_norm = normalizar_texto(nome)
-                if chave_norm:
-                    mapa_excel[chave_norm] = {
-                        'plu': plu,
-                        'nome_original': nome,
-                        'de': de,
-                        'oferta': oferta
-                    }
+                itens_planilha.append({
+                    'plu': plu,
+                    'nome': nome,
+                    'de': de,
+                    'oferta': oferta
+                })
 
             # --- LER HTML ---
             arquivo_html.seek(0)
@@ -154,25 +153,43 @@ if st.button("🚀 Executar Validação Completa"):
             
             resultados = []
             
-            for el in blocos:
-                container = el.find_parent('table') or el
-                txt_bloco = str(container)
+            # AGORA O CICLO PERCORRE CADA ITEM DA PLANILHA (GARANTINDO QUE NENHUM É ESQUECIDO)
+            for item in itens_planilha:
+                plu = item['plu']
+                nome_ex = item['nome']
+                de_ex = item['de']
+                of_ex = item['oferta']
                 
-                titulo_html = el.get('title', '')
-                if not titulo_html:
-                    titulo_html = el.get_text(strip=True)[:50]
+                chave_ex_norm = normalizar_texto(nome_ex)
                 
-                chave_html_norm = normalizar_texto(titulo_html)
+                # Procura no HTML o bloco correspondente por PLU (se já tiver) ou por descrição
+                bloco_encontrado = soup.find(id=plu)
+                el_titulo = None
                 
-                item_excel = None
-                for chave_ex, dados in mapa_excel.items():
-                    if chave_ex in chave_html_norm or chave_html_norm in chave_ex or len(set(chave_ex.split()).intersection(set(chave_html_norm.split()))) >= 2:
-                        item_excel = dados
-                        break
+                if not bloco_encontrado:
+                    # Tenta procurar comparando o texto dos blocos do HTML com o nome do produto da planilha
+                    for el in blocos:
+                        container = el.find_parent('table') or el
+                        titulo_html = el.get('title', '')
+                        if not titulo_html:
+                            titulo_html = el.get_text(strip=True)[:60]
+                        
+                        chave_html_norm = normalizar_texto(titulo_html)
+                        
+                        # Correspondência por proximidade de texto
+                        if chave_ex_norm and (chave_ex_norm in chave_html_norm or chave_html_norm in chave_ex_norm or len(set(chave_ex_norm.split()).intersection(set(chave_html_norm.split()))) >= 2):
+                            bloco_encontrado = container
+                            el_titulo = el
+                            break
                 
-                if item_excel:
-                    plu = item_excel['plu']
-                    el['id'] = plu # Injeta o PLU no HTML
+                if bloco_encontrado:
+                    # Injeta o PLU no HTML encontrado
+                    if el_titulo and el_titulo.has_attr('title'):
+                        el_titulo['id'] = plu
+                    else:
+                        bloco_encontrado['id'] = plu
+                        
+                    txt_bloco = str(bloco_encontrado)
                     
                     # Extração de preços do HTML
                     m_de = re.search(r'DE\s*R\$\s*([\d,]+)', txt_bloco)
@@ -183,12 +200,8 @@ if st.button("🚀 Executar Validação Completa"):
                         m_of = re.search(r'R\$\s*([\d,]+)', txt_bloco)
                     oferta_html = float(m_of.group(1).replace(',', '.')) if m_of else None
                     
-                    # Validação
                     status = "✅ OK"
                     detalhes = []
-                    
-                    de_ex = item_excel['de']
-                    of_ex = item_excel['oferta']
                     
                     if de_html is not None and de_ex is not None:
                         if abs(de_html - de_ex) > 0.01:
@@ -201,28 +214,38 @@ if st.button("🚀 Executar Validação Completa"):
                             detalhes.append(f"Oferta HTML R${oferta_html:.2f} != Planilha R${of_ex:.2f}")
 
                     resultados.append({
-                        "Produto": item_excel['nome_original'],
+                        "Produto": nome_ex,
                         "PLU": plu,
                         "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if de_ex is not None and of_ex is not None else "Não definido",
                         "HTML (De / Oferta)": f"R$ {de_html:.2f} / R$ {oferta_html:.2f}" if de_html is not None and oferta_html is not None else "Não lido",
                         "Status": status,
                         "Observação": " | ".join(detalhes) if detalhes else "Preços conferem perfeitamente"
                     })
+                else:
+                    # Item está na planilha mas não foi encontrado no HTML
+                    resultados.append({
+                        "Produto": nome_ex,
+                        "PLU": plu,
+                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if de_ex is not None and of_ex is not None else "Não definido",
+                        "HTML (De / Oferta)": "Não encontrado",
+                        "Status": "⚠️ Não encontrado no HTML",
+                        "Observação": "O item consta na planilha mas não foi localizado no e-mail HTML"
+                    })
 
             # --- EXIBIÇÃO DOS RESULTADOS EM TABELA ---
-            st.markdown("### 📊 Relatório Detalhado de Validação")
+            st.markdown(f"### 📊 Relatório Detalhado de Validação ({len(resultados)} itens analisados)")
             
             if resultados:
                 df_res = pd.DataFrame(resultados)
                 st.dataframe(df_res, use_container_width=True)
                 
-                erros_count = sum(1 for r in resultados if "❌" in r["Status"])
+                erros_count = sum(1 for r in resultados if "❌" in r["Status"] or "⚠️" in r["Status"])
                 if erros_count == 0:
-                    st.success(f"✅ Validação bem-sucedida! Todos os {len(resultados)} produtos validados conferem rigorosamente entre a planilha e o HTML.")
+                    st.success(f"✅ Validação concluída com sucesso! Todos os {len(resultados)} produtos da planilha foram encontrados e conferem rigorosamente.")
                 else:
-                    st.error(f"⚠️ Atenção! Foram encontrados **{erros_count}** produto(s) com divergência de preços no e-mail!")
+                    st.warning(f"⚠️ Atenção! Foram encontrados **{erros_count}** alertas/erros (itens com divergência ou ausentes no HTML).")
             else:
-                st.warning("⚠️ Nenhum produto em comum foi cruzado entre a planilha e o HTML. Verifique se as descrições batem.")
+                st.warning("⚠️ Nenhum item foi processado.")
 
             # Botão de download do HTML atualizado com os PLUs injetados
             novo_html_str = str(soup)
