@@ -2,8 +2,17 @@ import streamlit as st
 import pandas as pd
 import re
 from bs4 import BeautifulSoup
+import unicodedata
 
-# --- FUNÇÕES DE LIMPEZA ---
+# --- FUNÇÕES DE LIMPEZA E NORMALIZAÇÃO ---
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+    # Remove acentos, espaços extras e deixa em maiúsculo para comparar descrições perfeitamente
+    nfkd = unicodedata.normalize('NFKD', str(texto))
+    sem_acento = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    return re.sub(r'[^A-Z0-9]', '', sem_acento.upper())
+
 def limpar_preco(valor):
     if pd.isna(valor) or valor == '' or str(valor).upper().strip() == 'X':
         return None
@@ -28,7 +37,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador de Ofertas CRM - Nagumo", layout="wide", page_icon="📝")
+st.set_page_config(page_title="Validador e Injetor de PLU - Nagumo", layout="wide", page_icon="📝")
 
 st.markdown("""
     <style>
@@ -41,21 +50,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas CRM - Nagumo")
-st.markdown("Validação estrita de preços cruzando a planilha Excel com o e-mail HTML na ordem correta.")
+st.title("📝 Validador de Ofertas & Injetor de PLU - Nagumo")
+st.markdown("O sistema cruza por descrição, injeta o PLU no HTML e valida os preços **De** e **Oferta**.")
 
 # --- INTERFACE DO USUÁRIO ---
-cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
+cluster = st.selectbox("1. Qual cluster você deseja validar/processar?", ["Lojas (SP)", "Rio"])
 
 col1, col2 = st.columns(2)
 with col1:
     arquivo_excel = st.file_uploader("2. Suba a Planilha de Ofertas (Excel)", type=["xlsx"])
 with col2:
-    arquivo_html = st.file_uploader("3. Suba o E-mail (HTML)", type=["html"])
+    arquivo_html = st.file_uploader("3. Suba o E-mail Original (HTML)", type=["html"])
 
-if st.button("🔍 Validar Preços"):
+if st.button("🚀 Executar Validação e Injeção de PLU"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("Validando preços..."):
+        with st.spinner("Analisando planilha, cruzando descrições e validando preços..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -82,19 +91,20 @@ if st.button("🔍 Validar Preços"):
                 st.error("❌ Erro: Coluna PLU não encontrada na planilha.")
                 st.stop()
                 
-            # Mapeamento do cabeçalho duplo
+            # Mapeamento do cabeçalho duplo (SP / Rio)
             row_main = df_raw.iloc[linha_plu_idx].values
             row_sub = df_raw.iloc[linha_plu_idx + 1].values
             
-            col_plu_idx = -1
-            sp_preco_idx = -1; sp_oferta_idx = -1; sp_cartao_idx = -1
-            rio_preco_idx = -1; rio_oferta_idx = -1; rio_cartao_idx = -1
+            col_plu_idx = -1; col_prod_idx = -1
+            sp_preco_idx = -1; sp_oferta_idx = -1
+            rio_preco_idx = -1; rio_oferta_idx = -1
             
             current_cluster = ""
             for i in range(len(row_main)):
                 if pd.notna(row_main[i]):
                     val_main = str(row_main[i]).upper()
                     if "PLU" in val_main: col_plu_idx = i
+                    elif "PRODUTO" in val_main or "DESC" in val_main: col_prod_idx = i
                     elif "NAGUMO" in val_main: current_cluster = val_main
                 
                 sub_val = str(row_sub[i]).upper() if pd.notna(row_sub[i]) else ""
@@ -102,82 +112,116 @@ if st.button("🔍 Validar Preços"):
                 if "NAGUMO SP" in current_cluster:
                     if "PREÇO" in sub_val or "PRECO" in sub_val: sp_preco_idx = i
                     elif "OFERTA" in sub_val and "CART" not in sub_val: sp_oferta_idx = i
-                    elif "CART" in sub_val or "MEU NAGUMO" in sub_val: sp_cartao_idx = i
                 elif "NAGUMO RIO" in current_cluster:
                     if "PREÇO" in sub_val or "PRECO" in sub_val: rio_preco_idx = i
                     elif "OFERTA" in sub_val and "CART" not in sub_val: rio_oferta_idx = i
-                    elif "CART" in sub_val or "MEU NAGUMO" in sub_val: rio_cartao_idx = i
+
+            # Se não achou col_prod_idx explicitamente, assume que é logo após o PLU
+            if col_prod_idx == -1:
+                col_prod_idx = col_plu_idx + 1
 
             idx_preco = sp_preco_idx if cluster == "Lojas (SP)" else rio_preco_idx
             idx_oferta = sp_oferta_idx if cluster == "Lojas (SP)" else rio_oferta_idx
-            idx_cartao = sp_cartao_idx if cluster == "Lojas (SP)" else rio_cartao_idx
 
             df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
 
-            produtos_excel = []
+            # Mapear dados do Excel por descrição normalizada
+            mapa_excel = {}
             for _, row in df_excel.iterrows():
                 if col_plu_idx == -1 or col_plu_idx >= len(row) or pd.isna(row.iloc[col_plu_idx]):
                     continue
                 plu = limpar_plu(row.iloc[col_plu_idx])
-                if not plu: continue
+                if not plu: 
+                    continue
                 
-                nome = str(row.iloc[col_plu_idx + 1]) if col_plu_idx + 1 < len(row) else "Produto"
+                nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else ""
                 de = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 and idx_preco < len(row) else None
                 oferta = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 and idx_oferta < len(row) else None
-                cartao = limpar_preco(row.iloc[idx_cartao]) if idx_cartao != -1 and idx_cartao < len(row) else None
                 
-                produtos_excel.append({'plu': plu, 'nome': nome, 'de': de, 'oferta': oferta, 'cartao': cartao})
+                chave_norm = normalizar_texto(nome)
+                if chave_norm:
+                    mapa_excel[chave_norm] = {
+                        'plu': plu,
+                        'nome_original': nome,
+                        'de': de,
+                        'oferta': oferta
+                    }
 
             # --- LER HTML ---
             arquivo_html.seek(0)
             html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # Extrair os blocos de produtos do HTML em ordem estrita
+            # Encontrar blocos de produtos no HTML (links com title ou tabelas)
             links = soup.find_all('a', title=True)
             blocos = links if links else soup.find_all('table', attrs={'width': True})
             
-            produtos_html = []
+            erros = []
+            encontrados_count = 0
+            
             for el in blocos:
                 container = el.find_parent('table') or el
-                txt = str(container)
+                txt_bloco = str(container)
                 
-                # Extrair Preço De
-                m_de = re.search(r'DE\s*R\$\s*([\d,]+)', txt)
-                de_val = float(m_de.group(1).replace(',', '.')) if m_de else None
+                # Pega o título/descrição descrita no HTML (ex: atributo title ou texto interno)
+                titulo_html = el.get('title', '')
+                if not titulo_html:
+                    titulo_html = el.get_text(strip=True)[:50]
                 
-                # Extrair Preço Oferta
-                m_of = re.search(r'background-color:#D50037[^>]*>.*?R\$\s*([\d,]+)', txt, re.DOTALL)
-                if not m_of:
-                    m_of = re.search(r'R\$\s*([\d,]+)', txt)
-                of_val = float(m_of.group(1).replace(',', '.')) if m_of else None
+                chave_html_norm = normalizar_texto(titulo_html)
                 
-                produtos_html.append({'de': de_val, 'oferta': of_val})
+                # Tenta cruzar a descrição do HTML com o dicionário do Excel
+                item_excel = None
+                for chave_ex, dados in mapa_excel.items():
+                    # Verifica correspondência parcial robusta (se parte significativa da string bate)
+                    if chave_ex in chave_html_norm or chave_html_norm in chave_ex or len(set(chave_ex.split()).intersection(set(chave_html_norm.split()))) >= 2:
+                        item_excel = dados
+                        break
+                
+                if item_excel:
+                    encontrados_count += 1
+                    plu = item_excel['plu']
+                    
+                    # 1. INJEÇÃO DO PLU NO HTML
+                    el['id'] = plu
+                    
+                    # 2. EXTRAÇÃO DE PREÇOS DO HTML PARA COMPARAÇÃO
+                    # Extrair Preço De
+                    m_de = re.search(r'DE\s*R\$\s*([\d,]+)', txt_bloco)
+                    de_html = float(m_de.group(1).replace(',', '.')) if m_de else None
+                    
+                    # Extrair Preço Oferta
+                    m_of = re.search(r'background-color:#D50037[^>]*>.*?R\$\s*([\d,]+)', txt_bloco, re.DOTALL)
+                    if not m_of:
+                        m_of = re.search(r'R\$\s*([\d,]+)', txt_bloco)
+                    oferta_html = float(m_of.group(1).replace(',', '.')) if m_of else None
+                    
+                    # 3. VALIDAÇÃO DOS PREÇOS (DE e OFERTA)
+                    nome_prod = item_excel['nome_original']
+                    
+                    if de_html is not None and item_excel['de'] is not None and abs(de_html - item_excel['de']) > 0.01:
+                        erros.append(f"**ERRO PREÇO (DE)** | **{nome_prod}** (PLU: {plu}) | HTML: R${de_html:.2f} | Excel: R${item_excel['de']:.2f}")
+                    
+                    if oferta_html is not None and item_excel['oferta'] is not None and abs(oferta_html - item_excel['oferta']) > 0.01:
+                        erros.append(f"**ERRO OFERTA** | **{nome_prod}** (PLU: {plu}) | HTML: R${oferta_html:.2f} | Excel: R${item_excel['oferta']:.2f}")
 
-            # --- CRUZAMENTO E VALIDAÇÃO ---
-            st.markdown("### 📊 Relatório de Validação")
+            # --- EXIBIÇÃO DOS RESULTADOS ---
+            st.markdown("### 📊 Relatório de Validação e Injeção")
+            st.info(f"Produtos cruzados com sucesso entre Planilha e HTML: {encontrados_count}")
             
-            erros = []
-            validados = 0
-            
-            total_comparar = min(len(produtos_excel), len(produtos_html))
-            for i in range(total_comparar):
-                ex = produtos_excel[i]
-                ht = produtos_html[i]
-                validados += 1
-                
-                # Compara DE
-                if ht['de'] is not None and ex['de'] is not None and abs(ht['de'] - ex['de']) > 0.01:
-                    erros.append(f"**ERRO PREÇO (DE)** | Item {i+1}: **{ex['nome']}** (PLU: {ex['plu']}) | HTML: R${ht['de']:.2f} | Excel: R${ex['de']:.2f}")
-                
-                # Compara OFERTA
-                if ht['oferta'] is not None and ex['oferta'] is not None and abs(ht['oferta'] - ex['oferta']) > 0.01:
-                    erros.append(f"**ERRO OFERTA** | Item {i+1}: **{ex['nome']}** (PLU: {ex['plu']}) | HTML: R${ht['oferta']:.2f} | Excel: R${ex['oferta']:.2f}")
-
             if not erros:
-                st.success(f"✅ Perfeito! Todos os {validados} produtos conferem rigorosamente entre o Excel e o HTML para o cluster **{cluster}**!")
+                st.success(f"✅ Perfeito! Todos os preços conferem rigorosamente e os PLUs foram injetados com sucesso para o cluster **{cluster}**!")
             else:
                 for e in erros:
                     st.error(e)
+            
+            # Botão para baixar o HTML com os PLUs injetados automaticamente
+            novo_html_str = str(soup)
+            st.download_button(
+                label="📥 Baixar HTML com PLUs Injetados",
+                data=novo_html_str,
+                file_name=f"tabloide_{cluster.lower().replace(' ', '_')}_com_plus.html",
+                mime="text/html"
+            )
     else:
         st.warning("Por favor, faça o upload da planilha Excel e do arquivo HTML.")
