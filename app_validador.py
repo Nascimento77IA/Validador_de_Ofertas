@@ -177,7 +177,7 @@ if st.button("🔍 Validar Preços"):
             produtos_html.append({'nome_original': nome, 'nome_limpo': limpar_texto(nome), 'de': de_preco, 'oferta': oferta_preco, 'cartao': cartao_preco})
 
         # ==========================================
-        # NOVO CRUZAMENTO (Lógica Imbatível)
+        # CRUZAMENTO E VALIDAÇÃO (Similaridade Pura)
         # ==========================================
         erros = []
         alertas = []
@@ -190,27 +190,19 @@ if st.button("🔍 Validar Preços"):
             if chave_h in mapa_excel:
                 dados_excel = mapa_excel[chave_h]
             else:
-                melhor_score = -999
+                melhor_score = 0
                 melhor_chave = None
                 
-                palavras_h_set = set(chave_h.split())
-                
                 for k_excel in mapa_excel.keys():
-                    palavras_e = k_excel.split()
+                    # Calcula a porcentagem de semelhança entre as frases inteiras
+                    similaridade = difflib.SequenceMatcher(None, chave_h, k_excel).ratio()
                     
-                    # 1. Conta quantas palavras o Excel e o HTML têm em comum
-                    pontos = len(set(palavras_e).intersection(palavras_h_set))
-                    
-                    # 2. Penaliza severamente palavras grandes (marcas) do Excel que não estejam no HTML
-                    for p in palavras_e:
-                        if len(p) > 3 and p not in palavras_h_set:
-                            pontos -= 4
-                            
-                    if pontos > melhor_score:
-                        melhor_score = pontos
+                    if similaridade > melhor_score:
+                        melhor_score = similaridade
                         melhor_chave = k_excel
                         
-                if melhor_chave and melhor_score > 0:
+                # Se as frases forem pelo menos 45% parecidas, ele assume que é o mesmo produto e não gera alerta amarelo
+                if melhor_chave and melhor_score > 0.45:
                     dados_excel = mapa_excel[melhor_chave]
 
             if dados_excel:
