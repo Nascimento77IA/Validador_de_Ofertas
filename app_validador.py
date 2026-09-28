@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
 import re
-import unicodedata
-import difflib
-import html
+from bs4 import BeautifulSoup
 
 # --- FUNÇÕES DE LIMPEZA ---
 def limpar_preco(valor):
-    if pd.isna(valor):
+    if pd.isna(valor) or valor == '' or str(valor).upper().strip() == 'X':
         return None
     if isinstance(valor, (int, float)):
         return float(valor)
@@ -21,32 +19,16 @@ def limpar_preco(valor):
     except ValueError:
         return None
 
-def limpar_texto(texto):
-    if not isinstance(texto, str):
+def limpar_plu(valor):
+    if pd.isna(valor):
         return ""
-    texto = texto.lower()
-    texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    
-    # SEPARA LETRAS DE NÚMEROS (ex: OVOS500G vira OVOS 500 G)
-    texto = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', texto)
-    texto = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', texto)
-
-    substituicoes = {
-        r'\brefr\.': 'refrigerante ', r'\bcerv\.': 'cerveja ', r'\bsabon\.': 'sabonete ',
-        r'\bmolho tom\.': 'molho de tomate ', r'\bmac\b|\bmac\.': 'macarrao ', r'\blv\.': 'longa vida ',
-        r'\bref\.': 'refinado ', r'\bcond\.': 'condensado ', r'\btrad\.': 'tradicional ',
-        r'\bsac\.': 'sache ', r'\bcg\.': 'congelada ', r'\blava r\.po\b': 'lava roupas em po ',
-        r'\bguar\.': 'guarana ', r'\b1lt\b': '1l', r'\b2lt\b': '2l', r'\blt\b': 'lata ',
-        r'\bc/': 'com ', r'\bc\\': 'com ', 
-        r'pet': '', r'sachet': 'sache', r'pouch': '', r'\bunids?\.?': '',
-    }
-    for padrao, subst in substituicoes.items():
-        texto = re.sub(padrao, subst, texto)
-    texto = re.sub(r'[^\w\s]', ' ', texto)
-    return re.sub(r'\s+', ' ', texto).strip()
+    texto = str(valor).strip()
+    if texto.endswith('.0'):
+        texto = texto[:-2]
+    return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador de Ofertas", layout="wide")
+st.set_page_config(page_title="Validador de Ofertas CRM - Nagumo/BWCA", layout="wide", page_icon="📝")
 
 st.markdown("""
     <style>
@@ -56,19 +38,15 @@ st.markdown("""
         font-family: 'Nunito Sans', sans-serif;
         font-weight: 800;
     }
-    
-    [data-testid="stIconMaterial"], .material-icons, svg, [class*="icon"] {
-        font-family: "Material Symbols Rounded", "Material Icons", sans-serif !important;
-        font-weight: normal !important;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas CRM - Nagumo/BWCA")
-st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio.")
+# SE O TÍTULO ABAIXO NÃO APARECER NA SUA TELA, O ARQUIVO NÃO FOI SALVO!
+st.title("📝 Validador de Ofertas CRM (Versão 2.0)")
+st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. Validação 100% ancorada pelo PLU.")
 
 # --- INTERFACE DO USUÁRIO ---
-praca_escolhida = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"]).lower()
+cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
 
 col1, col2 = st.columns(2)
 with col1:
@@ -77,159 +55,161 @@ with col2:
     arquivo_html = st.file_uploader("3. Suba o E-mail (HTML)", type=["html"])
 
 if st.button("🔍 Validar Preços"):
-    if not arquivo_excel or not arquivo_html:
-        st.warning("Por favor, faça o upload dos dois arquivos antes de continuar.")
-        st.stop()
-
-    with st.spinner("Analisando arquivos..."):
-        # ==========================================
-        # LER EXCEL
-        # ==========================================
-        df_excel = pd.read_excel(arquivo_excel, header=None)
-        
-        if "sp" in praca_escolhida or "lojas" in praca_escolhida:
-            praca_str = "NAGUMO SP"
-        else:
-            praca_str = "NAGUMO RIO"
+    if arquivo_excel and arquivo_html:
+        with st.spinner("Analisando e cruzando PLUs..."):
             
-        linha_praca = -1
-        coluna_praca = -1
-
-        for r in range(min(10, len(df_excel))):
-            for c in range(len(df_excel.columns)):
-                val = str(df_excel.iloc[r, c]).upper()
-                val = re.sub(r'\s+', ' ', val).strip()
-                if praca_str in val:
-                    linha_praca = r
-                    coluna_praca = c
+            # --- LER EXCEL ---
+            df_raw = pd.read_excel(arquivo_excel, header=None)
+            
+            # 1. Achar o cabeçalho correto automaticamente
+            linha_cab = -1
+            for i, row in df_raw.iterrows():
+                row_str = " ".join([str(x).upper() for x in row.values])
+                if 'PLU' in row_str and 'PRE' in row_str and 'OFERTA' in row_str:
+                    linha_cab = i
                     break
-            if linha_praca != -1:
-                break
-
-        if linha_praca == -1:
-            st.error(f"ERRO: Não encontrei '{praca_str}' no cabeçalho. Verifique o arquivo Excel.")
-            st.stop()
-
-        linha_cabecalho = linha_praca + 1
-        col_preco = -1
-        col_oferta = -1
-        col_cartao = -1
-
-        limite_busca = min(coluna_praca + 4, len(df_excel.columns))
-        for c in range(coluna_praca, limite_busca):
-            val_coluna = str(df_excel.iloc[linha_cabecalho, c]).upper()
-            if col_preco == -1 and ("PREÇO" in val_coluna or "PRECO" in val_coluna):
-                col_preco = c
-            elif col_oferta == -1 and "OFERTA" in val_coluna and "CART" not in val_coluna and "NAGUMO" not in val_coluna:
-                col_oferta = c
-            elif col_cartao == -1 and ("CARTÃO" in val_coluna or "CARTAO" in val_coluna or "MEU NAGUMO" in val_coluna):
-                col_cartao = c
-
-        if col_preco == -1 or col_oferta == -1:
-            st.error(f"ERRO: Achei '{praca_str}', mas não encontrei as colunas 'PREÇO' ou 'OFERTA' embaixo dela.")
-            st.stop()
-
-        col_produto = 1
-        for c in range(len(df_excel.columns)):
-            val_prod1 = str(df_excel.iloc[linha_praca, c]).upper()
-            val_prod2 = str(df_excel.iloc[linha_cabecalho, c]).upper()
-            if "PRODUTO" in val_prod1 or "PRODUTO" in val_prod2:
-                col_produto = c
-                break
-
-        mapa_excel = {}
-        for index, row in df_excel.iloc[linha_cabecalho + 1:].iterrows():
-            nome_excel_original = str(row.iloc[col_produto])
-            if pd.isna(nome_excel_original) or not nome_excel_original.strip() or nome_excel_original.lower() == 'nan':
-                continue
-                
-            chave_excel = limpar_texto(nome_excel_original)
-            de_ex = limpar_preco(row.iloc[col_preco]) if col_preco < len(row) else None
-            of_ex = limpar_preco(row.iloc[col_oferta]) if col_oferta < len(row) else None
-            ca_ex = limpar_preco(row.iloc[col_cartao]) if col_cartao != -1 and col_cartao < len(row) else None
-                
-            mapa_excel[chave_excel] = {'nome_original': nome_excel_original.strip(), 'de': de_ex, 'oferta': of_ex, 'cartao': ca_ex}
-
-        # ==========================================
-        # LER HTML
-        # ==========================================
-        html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
-        produtos_html = []
-        matches = re.finditer(r'color:#003865;">(.*?)</td>', html_content, re.DOTALL)
-
-        for m in matches:
-            nome = html.unescape(m.group(1)).strip()
-            nome = re.sub(r'\s+', ' ', nome)
-            if '%%FirstName%%' in nome or 'Ofertas' in nome:
-                continue
-            
-            rest_of_html = html_content[m.end():m.end()+3000] 
-            
-            m_de = re.search(r'DE\s*R\$\s*([\d,]+)', rest_of_html)
-            de_preco = float(m_de.group(1).replace(',', '.')) if m_de else None
-                
-            m_oferta = re.search(r'bgcolor="#D50037"[^>]*>.*?R\$\s*([\d,]+)', rest_of_html, re.DOTALL)
-            oferta_preco = float(m_oferta.group(1).replace(',', '.')) if m_oferta else None
-                
-            m_cartao = re.search(r'Pre&#231;o Exclusivo.*?R\$\s*([\d,]+).*?Cart&#227;o Nagumo', rest_of_html, re.DOTALL)
-            cartao_preco = float(m_cartao.group(1).replace(',', '.')) if m_cartao else None
-
-            produtos_html.append({'nome_original': nome, 'nome_limpo': limpar_texto(nome), 'de': de_preco, 'oferta': oferta_preco, 'cartao': cartao_preco})
-
-        # ==========================================
-        # CRUZAMENTO E VALIDAÇÃO (Similaridade Pura)
-        # ==========================================
-        erros = []
-        alertas = []
-
-        for p_html in produtos_html:
-            nome_h = p_html['nome_original']
-            chave_h = p_html['nome_limpo']
-            dados_excel = None
-            
-            if chave_h in mapa_excel:
-                dados_excel = mapa_excel[chave_h]
-            else:
-                melhor_score = 0
-                melhor_chave = None
-                
-                for k_excel in mapa_excel.keys():
-                    # Calcula a porcentagem de semelhança entre as frases inteiras
-                    similaridade = difflib.SequenceMatcher(None, chave_h, k_excel).ratio()
                     
-                    if similaridade > melhor_score:
-                        melhor_score = similaridade
-                        melhor_chave = k_excel
-                        
-                # Se as frases forem pelo menos 45% parecidas, ele assume que é o mesmo produto e não gera alerta amarelo
-                if melhor_chave and melhor_score > 0.45:
-                    dados_excel = mapa_excel[melhor_chave]
-
-            if dados_excel:
-                if p_html['de'] is not None and dados_excel['de'] is not None and abs(p_html['de'] - dados_excel['de']) > 0.01:
-                    erros.append(f"**ERRO PREÇO (DE)** | {nome_h} | HTML: R${p_html['de']:.2f} | Excel: R${dados_excel['de']:.2f}")
-                if p_html['oferta'] is not None and dados_excel['oferta'] is not None and abs(p_html['oferta'] - dados_excel['oferta']) > 0.01:
-                    erros.append(f"**ERRO OFERTA** | {nome_h} | HTML: R${p_html['oferta']:.2f} | Excel: R${dados_excel['oferta']:.2f}")
-                if p_html['cartao'] is not None:
-                    if dados_excel['cartao'] is not None:
-                        if abs(p_html['cartao'] - dados_excel['cartao']) > 0.01:
-                            erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML: R${p_html['cartao']:.2f} | Excel: R${dados_excel['cartao']:.2f}")
-                    else:
-                        erros.append(f"**ERRO CARTÃO** | {nome_h} | HTML tem Cartão (R${p_html['cartao']:.2f}), mas no Excel está vazio.")
-            else:
-                alertas.append(f"Produto do HTML **'{nome_h}'** não encontrou correspondência no Excel.")
-
-        # ==========================================
-        # RESULTADOS NA TELA
-        # ==========================================
-        st.subheader("Resultados da Validação")
-        if not erros and not alertas:
-            st.success("Tudo certo! Valores do HTML batem perfeitamente com o Excel. Pode disparar! 🚀")
-        
-        if erros:
-            for e in erros:
-                st.error(e)
+            if linha_cab == -1:
+                st.error("Erro: Não achei o cabeçalho com PLU, PREÇO e OFERTA na planilha.")
+                st.stop()
                 
-        if alertas:
-            for a in alertas:
-                st.warning(a)
+            # 2. Mapear colunas SP vs RIO de forma dinâmica
+            columns = df_raw.iloc[linha_cab].fillna("").astype(str).str.upper().str.strip()
+            df_excel = df_raw.iloc[linha_cab+1:].reset_index(drop=True)
+            
+            col_plu_idx = -1
+            sp_preco_idx = -1; sp_oferta_idx = -1; sp_cartao_idx = -1
+            rio_preco_idx = -1; rio_oferta_idx = -1; rio_cartao_idx = -1
+            
+            preco_count = 0; oferta_count = 0; cartao_count = 0
+            
+            for i, col_name in enumerate(columns):
+                if 'PLU' in col_name and col_plu_idx == -1:
+                    col_plu_idx = i
+                elif 'PREÇO' in col_name or 'PRECO' in col_name:
+                    if preco_count == 0: sp_preco_idx = i
+                    elif preco_count == 1: rio_preco_idx = i
+                    preco_count += 1
+                elif 'OFERTA' in col_name and 'CART' not in col_name and 'NAGUMO' not in col_name:
+                    if oferta_count == 0: sp_oferta_idx = i
+                    elif oferta_count == 1: rio_oferta_idx = i
+                    oferta_count += 1
+                elif 'CART' in col_name or 'MEU NAGUMO' in col_name:
+                    if cartao_count == 0: sp_cartao_idx = i
+                    elif cartao_count == 1: rio_cartao_idx = i
+                    cartao_count += 1
+                        
+            # Selecionar as colunas corretas baseado na escolha do usuário
+            if cluster == "Lojas (SP)":
+                idx_preco = sp_preco_idx
+                idx_oferta = sp_oferta_idx
+                idx_cartao = sp_cartao_idx
+            else:
+                idx_preco = rio_preco_idx
+                idx_oferta = rio_oferta_idx
+                idx_cartao = rio_cartao_idx
+
+            # 3. Guardar os dados do Excel
+            mapa_excel = {}
+            for _, row in df_excel.iterrows():
+                if col_plu_idx == -1 or pd.isna(row.iloc[col_plu_idx]):
+                    continue
+                    
+                plu_limpo = limpar_plu(row.iloc[col_plu_idx])
+                if not plu_limpo:
+                    continue
+                
+                de_val = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 else None
+                of_val = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 else None
+                ca_val = limpar_preco(row.iloc[idx_cartao]) if idx_cartao != -1 else None
+                
+                mapa_excel[plu_limpo] = {
+                    'de': de_val,
+                    'oferta': of_val,
+                    'cartao': ca_val
+                }
+
+            # --- LER HTML ---
+            html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            produtos_html = []
+            links_com_plu = soup.find_all(id=True)
+            
+            ids_processados = set()
+            for el in links_com_plu:
+                plu_html = limpar_plu(el.get('id'))
+                if not plu_html or plu_html in ids_processados:
+                    continue
+                
+                ids_processados.add(plu_html)
+                nome_prod_html = el.get('title', el.get_text(strip=True)[:40] or 'Produto no HTML')
+                
+                container_pai = el.find_parent('table') or el.find_parent('td') or el
+                html_item_str = str(container_pai)
+
+                m_de = re.search(r'DE\s*R\$\s*([\d,]+)', html_item_str)
+                de_preco = float(m_de.group(1).replace(',', '.')) if m_de else None
+
+                m_of = re.search(r'background-color:#D50037[^>]*>.*?R\$\s*([\d,]+)', html_item_str, re.DOTALL)
+                if not m_of:
+                    m_of = re.search(r'R\$\s*([\d,]+)', html_item_str)
+                oferta_preco = float(m_of.group(1).replace(',', '.')) if m_of else None
+
+                m_card = re.search(r'Cartão Nagumo.*?R\$\s*([\d,]+)', html_item_str, re.DOTALL)
+                if not m_card:
+                    m_card = re.search(r'Preço Exclusivo.*?R\$\s*([\d,]+)', html_item_str, re.DOTALL)
+                cartao_preco = float(m_card.group(1).replace(',', '.')) if m_card else None
+
+                produtos_html.append({
+                    'plu': plu_html,
+                    'nome': nome_prod_html,
+                    'de': de_preco,
+                    'oferta': oferta_preco,
+                    'cartao': cartao_preco
+                })
+
+            # --- CRUZAMENTO E VALIDAÇÃO ---
+            st.markdown("### Resultados da Validação (Por PLU)")
+            
+            erros = []
+            alertas = []
+            validados_count = 0
+
+            for p_html in produtos_html:
+                plu_h = p_html['plu']
+                nome_h = p_html['nome']
+                
+                if plu_h in mapa_excel:
+                    dados_excel = mapa_excel[plu_h]
+                    validados_count += 1
+                    
+                    if p_html['de'] is not None and dados_excel['de'] is not None and abs(p_html['de'] - dados_excel['de']) > 0.01:
+                        erros.append(f"**ERRO PREÇO (DE)** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['de']:.2f} | Excel: R${dados_excel['de']:.2f}")
+                    
+                    if p_html['oferta'] is not None and dados_excel['oferta'] is not None and abs(p_html['oferta'] - dados_excel['oferta']) > 0.01:
+                        erros.append(f"**ERRO OFERTA** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['oferta']:.2f} | Excel: R${dados_excel['oferta']:.2f}")
+                    
+                    if p_html['cartao'] is not None:
+                        if dados_excel['cartao'] is not None:
+                            if abs(p_html['cartao'] - dados_excel['cartao']) > 0.01:
+                                erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML: R${p_html['cartao']:.2f} | Excel: R${dados_excel['cartao']:.2f}")
+                        else:
+                            erros.append(f"**ERRO CARTÃO** | {nome_h} (PLU: {plu_h}) | HTML tem Cartão (R${p_html['cartao']:.2f}), mas no Excel está vazio.")
+                else:
+                    alertas.append(f"⚠️ **PLU {plu_h} não encontrado:** O HTML pediu o PLU {plu_h}, mas ele não está na planilha.")
+
+            # --- EXIBIÇÃO ---
+            if validados_count == 0:
+                st.warning("⚠️ Nenhum PLU bateu. Confirme se os IDs estão corretos nas tags do HTML.")
+            else:
+                if not erros and not alertas:
+                    st.success(f"✅ Perfeito! Todos os {validados_count} produtos batem rigorosamente com o Excel.")
+                
+                for e in erros:
+                    st.error(e)
+                    
+                for a in alertas:
+                    st.warning(a)
+    else:
+        st.warning("Por favor, suba os dois arquivos para iniciar.")
