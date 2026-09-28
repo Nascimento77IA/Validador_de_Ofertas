@@ -41,9 +41,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# SE O TÍTULO NÃO MUDAR, O FICHEIRO NÃO FOI GRAVADO CORRETAMENTE!
-st.title("📝 Validador de Ofertas CRM (Versão 2.2)")
-st.markdown("Faça o upload dos arquivos da campanha para validar automaticamente os preços de Lojas (SP) ou Rio. Validação 100% ancorada pelo PLU.")
+st.title("📝 Validador de Ofertas CRM (Versão 2.3)")
+st.markdown("Validação estruturada de preços por PLU com suporte a cabeçalhos duplos (SP / Rio).")
 
 # --- INTERFACE DO USUÁRIO ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
@@ -56,73 +55,76 @@ with col2:
 
 if st.button("🔍 Validar Preços"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("Analisando e cruzando PLUs..."):
+        with st.spinner("Analisando cabeçalhos duplos e cruzando PLUs..."):
             
-            # Reposicionar o ponteiro do ficheiro para a linha zero (evita ficheiros vazios)
             arquivo_excel.seek(0)
             
-            # --- LER EXCEL (Modo Universal) ---
             try:
                 todas_abas = pd.read_excel(arquivo_excel, sheet_name=None, header=None)
             except Exception as e:
-                st.error(f"Erro grave ao ler o arquivo Excel: {e}")
+                st.error(f"Erro ao ler o Excel: {e}")
                 st.stop()
                 
             df_raw = None
-            linha_cab = -1
+            linha_plu_idx = -1
             aba_encontrada = ""
             
-            # Procura em todas as abas lidas
+            # Procura a linha que contém o PLU nas primeiras 20 linhas de qualquer aba
             for nome_aba, df_aba in todas_abas.items():
-                for i, row in df_aba.head(30).iterrows():
-                    # Junta a linha toda num grande texto, ignorando Maiúsculas/Minúsculas
-                    valores_linha = " ".join([str(x).upper() for x in row.values])
-                    
-                    if 'PLU' in valores_linha and 'OFERTA' in valores_linha:
-                        linha_cab = i
+                for i, row in df_aba.head(20).iterrows():
+                    row_str = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+                    if 'PLU' in row_str:
+                        linha_plu_idx = i
                         df_raw = df_aba
                         aba_encontrada = nome_aba
                         break
-                if linha_cab != -1:
+                if linha_plu_idx != -1:
                     break
                     
-            # MODO RAIO-X: Se falhar, mostra a tabela no ecrã para despiste
-            if df_raw is None or linha_cab == -1:
-                st.error("❌ Erro: Não achei o cabeçalho com as palavras 'PLU' e 'OFERTA' na planilha.")
-                st.warning("Veja abaixo o que o sistema conseguiu ler da primeira aba do seu arquivo. Será que as colunas mudaram de nome? (Ex: 'CÓDIGO' em vez de 'PLU')")
-                primeira_aba_valores = list(todas_abas.values())[0]
-                st.dataframe(primeira_aba_valores.head(15))
+            if df_raw is None or linha_plu_idx == -1:
+                st.error("❌ Erro: Não foi encontrada a coluna PLU na planilha.")
                 st.stop()
                 
-            st.info(f"✅ Cabeçalho encontrado na aba: **{aba_encontrada}** (Linha {linha_cab + 1})")
+            st.info(f"✅ Cabeçalho detetado na aba: **{aba_encontrada}** (Linha do PLU: {linha_plu_idx + 1})")
                 
-            # Mapear colunas SP vs RIO de forma dinâmica
-            columns = df_raw.iloc[linha_cab].fillna("").astype(str).str.upper().str.strip()
-            df_excel = df_raw.iloc[linha_cab+1:].reset_index(drop=True)
+            # Tratamento do cabeçalho duplo (Linha do PLU + Linha dos Preços logo abaixo)
+            row_main = df_raw.iloc[linha_plu_idx].values       # Ex: PLU, PRODUTO, NAGUMO SP, NAGUMO RIO
+            row_sub = df_raw.iloc[linha_plu_idx + 1].values    # Ex: PREÇO, OFERTA, PREÇO, OFERTA
             
             col_plu_idx = -1
             sp_preco_idx = -1; sp_oferta_idx = -1; sp_cartao_idx = -1
             rio_preco_idx = -1; rio_oferta_idx = -1; rio_cartao_idx = -1
             
-            preco_count = 0; oferta_count = 0; cartao_count = 0
-            
-            for i, col_name in enumerate(columns):
-                if 'PLU' in col_name and col_plu_idx == -1:
-                    col_plu_idx = i
-                elif 'PREÇO' in col_name or 'PRECO' in col_name:
-                    if preco_count == 0: sp_preco_idx = i
-                    elif preco_count == 1: rio_preco_idx = i
-                    preco_count += 1
-                elif 'OFERTA' in col_name and 'CART' not in col_name and 'NAGUMO' not in col_name:
-                    if oferta_count == 0: sp_oferta_idx = i
-                    elif oferta_count == 1: rio_oferta_idx = i
-                    oferta_count += 1
-                elif 'CART' in col_name or 'MEU NAGUMO' in col_name:
-                    if cartao_count == 0: sp_cartao_idx = i
-                    elif cartao_count == 1: rio_cartao_idx = i
-                    cartao_count += 1
+            current_cluster = ""
+            for i in range(len(row_main)):
+                # Atualiza o cluster atual se houver indicação na linha principal
+                if pd.notna(row_main[i]):
+                    val_main = str(row_main[i]).upper()
+                    if "PLU" in val_main:
+                        col_plu_idx = i
+                    elif "NAGUMO" in val_main:
+                        current_cluster = val_main
+                
+                # Lê a sub-coluna (preço, oferta, etc.)
+                sub_val = str(row_sub[i]).upper() if pd.notna(row_sub[i]) else ""
+                
+                if "NAGUMO SP" in current_cluster:
+                    if "PREÇO" in sub_val or "PRECO" in sub_val:
+                        sp_preco_idx = i
+                    elif "OFERTA" in sub_val and "CART" not in sub_val:
+                        sp_oferta_idx = i
+                    elif "CART" in sub_val or "MEU NAGUMO" in sub_val:
+                        sp_cartao_idx = i
                         
-            # Selecionar as colunas corretas baseado no cluster
+                elif "NAGUMO RIO" in current_cluster:
+                    if "PREÇO" in sub_val or "PRECO" in sub_val:
+                        rio_preco_idx = i
+                    elif "OFERTA" in sub_val and "CART" not in sub_val:
+                        rio_oferta_idx = i
+                    elif "CART" in sub_val or "MEU NAGUMO" in sub_val:
+                        rio_cartao_idx = i
+
+            # Define os índices baseando-se na escolha feita pelo usuário no ecrã
             if cluster == "Lojas (SP)":
                 idx_preco = sp_preco_idx
                 idx_oferta = sp_oferta_idx
@@ -132,19 +134,22 @@ if st.button("🔍 Validar Preços"):
                 idx_oferta = rio_oferta_idx
                 idx_cartao = rio_cartao_idx
 
-            # Guardar os dados do Excel num dicionário
+            # O conteúdo começa duas linhas abaixo do PLU (pulando a linha principal e a sub-linha de preços)
+            df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
+
+            # Mapeamento do Excel por PLU
             mapa_excel = {}
             for _, row in df_excel.iterrows():
-                if col_plu_idx == -1 or pd.isna(row.iloc[col_plu_idx]):
+                if col_plu_idx == -1 or col_plu_idx >= len(row) or pd.isna(row.iloc[col_plu_idx]):
                     continue
                     
                 plu_limpo = limpar_plu(row.iloc[col_plu_idx])
                 if not plu_limpo:
                     continue
                 
-                de_val = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 else None
-                of_val = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 else None
-                ca_val = limpar_preco(row.iloc[idx_cartao]) if idx_cartao != -1 else None
+                de_val = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 and idx_preco < len(row) else None
+                of_val = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 and idx_oferta < len(row) else None
+                ca_val = limpar_preco(row.iloc[idx_cartao]) if idx_cartao != -1 and idx_cartao < len(row) else None
                 
                 mapa_excel[plu_limpo] = {
                     'de': de_val,
@@ -228,7 +233,7 @@ if st.button("🔍 Validar Preços"):
                 st.warning("⚠️ Nenhum PLU bateu. Confirme se os IDs estão corretos nas tags do HTML.")
             else:
                 if not erros and not alertas:
-                    st.success(f"✅ Perfeito! Todos os {validados_count} produtos batem rigorosamente com o Excel.")
+                    st.success(f"✅ Perfeito! Todos os {validados_count} produtos batem rigorosamente com o Excel para o cluster **{cluster}**.")
                 
                 for e in erros:
                     st.error(e)
