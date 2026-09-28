@@ -49,7 +49,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("📝 Validador de Ofertas & Injetor de PLU - Nagumo")
+st.title("📝 Validador de Ofertas - Nagumo")
 st.markdown("Validação 100% abrangente: analisa todos os itens da planilha e cruza com o HTML.")
 
 # --- INTERFACE DO UTILIZADOR ---
