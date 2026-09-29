@@ -40,7 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🔍 Validador de Ofertas por PLU (Nagumo SP & Rio)")
-st.markdown("Validação estrita cruzando o HTML.")
+st.markdown("Validação estrita cruzando o HTML com a Planilha.")
 
 # --- INTERFACE DO USUÁRIO ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
