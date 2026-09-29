@@ -26,7 +26,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador Puro de Ofertas - Nagumo", layout="wide", page_icon="🔍")
+st.set_page_config(page_title="Validador de Ofertas - Nagumo", layout="wide", page_icon="🔍")
 
 st.markdown("""
     <style>
@@ -39,8 +39,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 Validador Puro de Ofertas por PLU (Nagumo SP & Rio)")
-st.markdown("Validação estrita cruzando o HTML (com PLUs embutidos) com o novo layout de colunas da planilha.")
+st.title("🔍 Validador de Ofertas por PLU (Nagumo SP & Rio)")
+st.markdown("Validação estrita cruzando o HTML.")
 
 # --- INTERFACE DO USUÁRIO ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
