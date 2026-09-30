@@ -26,7 +26,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador de Ofertas - Nagumo", layout="wide", page_icon="🔍")
+st.set_page_config(page_title="Validador Inteligente - Nagumo", layout="wide", page_icon="🛡️")
 
 st.markdown("""
     <style>
@@ -39,8 +39,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 Validador de Ofertas por PLU (Nagumo SP & Rio)")
-st.markdown("Validação estrita cruzando o HTML com a Planilha.")
+st.title("🛡️ Validador de Ofertas com Blindagem Comercial (SP & Rio)")
+st.markdown("Valida o HTML por PLU e audita automaticamente a coerência dos preços enviados pelo comercial.")
 
 # --- INTERFACE DO USUÁRIO ---
 cluster = st.selectbox("1. Qual cluster você deseja validar?", ["Lojas (SP)", "Rio"])
@@ -51,9 +51,9 @@ with col1:
 with col2:
     arquivo_html = st.file_uploader("3. Suba o HTML (com PLUs embutidos)", type=["html"])
 
-if st.button("🚀 Executar Validação de Preços"):
+if st.button("🚀 Executar Validação Inteligente"):
     if arquivo_excel and arquivo_html:
-        with st.spinner("Validando preços por PLU com o novo layout..."):
+        with st.spinner("Auditando planilha e validando preços no HTML..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -75,7 +75,6 @@ if st.button("🚀 Executar Validação de Preços"):
                 st.error("❌ Erro: Coluna PLU não encontrada na planilha.")
                 st.stop()
                 
-            # Mapeamento do novo cabeçalho estruturado (Linha principal com clusters e sublinha com Preço/Oferta)
             row_main = df_raw.iloc[linha_plu_idx].values
             row_sub = df_raw.iloc[linha_plu_idx + 1].values if linha_plu_idx + 1 < len(df_raw) else []
             
@@ -87,44 +86,32 @@ if st.button("🚀 Executar Validação de Preços"):
             for i in range(len(row_main)):
                 val_main = str(row_main[i]).upper() if pd.notna(row_main[i]) else ""
                 
-                if "PLU" in val_main: 
-                    col_plu_idx = i
-                elif "PRODUTO" in val_main or "DESC" in val_main: 
-                    col_prod_idx = i
-                elif "NAGUMO SP" in val_main: 
-                    cluster_atual = "SP"
-                elif "NAGUMO RIO" in val_main: 
-                    cluster_atual = "RIO"
-                elif "NAGUMO MIXTER" in val_main: 
-                    cluster_atual = "MIXTER"
+                if "PLU" in val_main: col_plu_idx = i
+                elif "PRODUTO" in val_main or "DESC" in val_main: col_prod_idx = i
+                elif "NAGUMO SP" in val_main: cluster_atual = "SP"
+                elif "NAGUMO RIO" in val_main: cluster_atual = "RIO"
+                elif "NAGUMO MIXTER" in val_main: cluster_atual = "MIXTER"
                 
                 sub_val = str(row_sub[i]).upper() if i < len(row_sub) and pd.notna(row_sub[i]) else ""
                 
                 if cluster_atual == "SP":
-                    if "PREÇO" in sub_val or "PRECO" in sub_val: 
-                        sp_preco_idx = i
-                    elif "OFERTA" in sub_val and "CART" not in sub_val: 
-                        sp_oferta_idx = i
+                    if "PREÇO" in sub_val or "PRECO" in sub_val: sp_preco_idx = i
+                    elif "OFERTA" in sub_val and "CART" not in sub_val: sp_oferta_idx = i
                 elif cluster_atual == "RIO":
-                    if "PREÇO" in sub_val or "PRECO" in sub_val: 
-                        rio_preco_idx = i
-                    elif "OFERTA" in sub_val and "CART" not in sub_val: 
-                        rio_oferta_idx = i
+                    if "PREÇO" in sub_val or "PRECO" in sub_val: rio_preco_idx = i
+                    elif "OFERTA" in sub_val and "CART" not in sub_val: rio_oferta_idx = i
 
             if col_prod_idx == -1:
                 col_prod_idx = col_plu_idx + 1
 
-            # Seleciona as colunas corretas conforme a escolha do usuário
-            if cluster == "Lojas (SP)":
-                idx_preco = sp_preco_idx
-                idx_oferta = sp_oferta_idx
-            else:
-                idx_preco = rio_preco_idx
-                idx_oferta = rio_oferta_idx
+            idx_preco = sp_preco_idx if cluster == "Lojas (SP)" else rio_preco_idx
+            idx_oferta = sp_oferta_idx if cluster == "Lojas (SP)" else rio_oferta_idx
 
             df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
 
             mapa_excel = {}
+            alertas_comerciais = []
+
             for _, row in df_excel.iterrows():
                 if col_plu_idx == -1 or col_plu_idx >= len(row) or pd.isna(row.iloc[col_plu_idx]):
                     continue
@@ -136,13 +123,20 @@ if st.button("🚀 Executar Validação de Preços"):
                 de = limpar_preco(row.iloc[idx_preco]) if idx_preco != -1 and idx_preco < len(row) else None
                 oferta = limpar_preco(row.iloc[idx_oferta]) if idx_oferta != -1 and idx_oferta < len(row) else None
                 
+                # --- CAMADA DE INTELIGÊNCIA / BLINDAGEM COMERCIAL ---
+                if de is not None and oferta is not None:
+                    if oferta >= de:
+                        alertas_comerciais.append(f"🚨 **Erro Comercial (Planilha)** | Produto: **{nome}** (PLU: {plu}) | A Oferta (R${oferta:.2f}) é maior ou igual ao Preço De (R${de:.2f}).")
+                    if de <= 0 or oferta <= 0:
+                        alertas_comerciais.append(f"🚨 **Erro Comercial (Planilha)** | Produto: **{nome}** (PLU: {plu}) | Há preços zerados ou inválidos.")
+
                 mapa_excel[plu] = {
                     'nome': nome,
                     'de': de,
                     'oferta': oferta
                 }
 
-            # --- LER HTML (SOMENTE LEITURA ESTRITA POR PLU) ---
+            # --- LER HTML ---
             arquivo_html.seek(0)
             html_content = arquivo_html.getvalue().decode('utf-8', errors='replace')
             soup = BeautifulSoup(html_content, 'html.parser')
@@ -150,11 +144,9 @@ if st.button("🚀 Executar Validação de Preços"):
             resultados = []
             
             for plu, dados_ex in mapa_excel.items():
-                # Procura no HTML pelo ID exato do PLU (ex: id="788274")
                 tag_plu = soup.find(id=plu) or soup.find(attrs={"data-plu": plu})
                 
                 if not tag_plu:
-                    # Busca alternativa caso o ID esteja parcial
                     for el in soup.find_all(True):
                         if el.get('id') and plu in str(el.get('id')):
                             tag_plu = el
@@ -167,14 +159,13 @@ if st.button("🚀 Executar Validação de Preços"):
                         "Planilha (De / Oferta)": f"R$ {dados_ex['de']:.2f} / R$ {dados_ex['oferta']:.2f}" if dados_ex['de'] and dados_ex['oferta'] else "N/D",
                         "HTML (De / Oferta)": "Não encontrado",
                         "Status": "⚠️ PLU Ausente no HTML",
-                        "Detalhes": f"O PLU {plu} consta na planilha para o cluster {cluster}, mas não foi localizado no HTML."
+                        "Detalhes": f"O PLU {plu} está na planilha para {cluster}, mas não foi localizado no HTML."
                     })
                     continue
                 
                 container = tag_plu.find_parent('table') or tag_plu.find_parent('td') or tag_plu
                 txt_bloco = str(container)
                 
-                # Extração cirúrgica dos preços do bloco HTML correspondente
                 m_de = re.search(r'DE\s*R\$\s*([\d,]+)', txt_bloco)
                 de_html = float(m_de.group(1).replace(',', '.')) if m_de else None
                 
@@ -208,14 +199,22 @@ if st.button("🚀 Executar Validação de Preços"):
                     "Detalhes": " | ".join(erros_detalhes) if erros_detalhes else "Preços conferem"
                 })
 
+            # --- EXIBIÇÃO DE ALERTAS COMERCIAIS ---
+            if alertas_comerciais:
+                st.error("🚨 **ATENÇÃO: Foram detetados erros lógicos/comerciais direto na planilha enviada pelo comercial!**")
+                for alerta in alertas_comerciais:
+                    st.warning(alerta)
+                st.markdown("---")
+
+            # --- EXIBIÇÃO DO RELATÓRIO DE PLU ---
             st.markdown(f"### 📊 Relatório de Validação por PLU — Cluster: **{cluster}**")
             df_res = pd.DataFrame(resultados)
             st.dataframe(df_res, use_container_width=True)
             
             problemas = sum(1 for r in resultados if "❌" in r["Status"] or "⚠️" in r["Status"])
-            if problemas == 0:
-                st.success(f"✅ Validação bem-sucedida! Todos os {len(resultados)} PLUs conferem rigorosamente com o cluster **{cluster}**.")
+            if problemas == 0 and not alertas_comerciais:
+                st.success(f"✅ Validação impecável! Planilha sem incoerências e todos os {len(resultados)} PLUs batem com o cluster **{cluster}**.")
             else:
-                st.error(f"⚠️ Atenção! Foram encontrados **{problemas}** problemas de divergência ou ausência no HTML.")
+                st.error(f"⚠️ Atenção! Foram encontrados **{problemas}** problemas no HTML e/ou incoerências na planilha do comercial.")
     else:
         st.warning("Por favor, faça o upload da planilha Excel e do arquivo HTML.")
