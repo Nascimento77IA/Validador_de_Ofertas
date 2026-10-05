@@ -22,11 +22,12 @@ def limpar_desconto(valor):
     if pd.isna(valor):
         return None
     
-    # Se o pandas/excel ler diretamente como float decimal (ex: 0.1347 para 13%)
+    # Se o pandas ler o resultado da fórmula do Excel como decimal (ex: 0.1165 para 12%)
     if isinstance(valor, (int, float)):
-        if 0 < float(valor) < 1:
-            return round(float(valor) * 100)
-        return round(float(valor))
+        val_float = float(valor)
+        if 0 < val_float < 1:
+            return math.floor((val_float * 100) + 0.5)
+        return math.floor(val_float + 0.5)
 
     texto = str(valor).upper().replace('%', '').replace(' ', '').strip()
     if texto in ['', 'X', 'NAN', '-']:
@@ -35,10 +36,9 @@ def limpar_desconto(valor):
         texto = texto.replace(',', '.')
     try:
         num = float(texto)
-        # Se vier como decimal fracionado (ex: '0.13')
         if 0 < num < 1:
-            return round(num * 100)
-        return round(num)
+            return math.floor((num * 100) + 0.5)
+        return math.floor(num + 0.5)
     except ValueError:
         return None
 
@@ -51,6 +51,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 def arredondar_comercial(valor):
+    # Regra comercial: >= .50 arredonda para cima, < .50 arredonda para baixo
     return math.floor(valor + 0.5)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -68,7 +69,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🎯 Validador Inteligente com Auditoria de Desconto (Regra Comercial)")
-st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto aplicando o arredondamento comercial correto.")
+st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto considerando fórmulas e arredondamento comercial.")
 
 # --- INTERFACE DO UTILIZADOR ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -318,6 +319,6 @@ if st.button("🚀 Executar Validação e Auditoria"):
                         else:
                             st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
             else:
-                st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
+                st.warning("Carregue pelo menos um ficheiro HTML para realizar a validação.")
     else:
         st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos ficheiros HTML.")
