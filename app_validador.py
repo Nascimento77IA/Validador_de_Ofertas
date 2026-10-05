@@ -17,6 +17,19 @@ def limpar_preco(valor):
     except ValueError:
         return "NAO_APLICA"
 
+def limpar_desconto(valor):
+    if pd.isna(valor):
+        return None
+    texto = str(valor).upper().replace('%', '').replace(' ', '').strip()
+    if texto in ['', 'X', 'NAN', '-']:
+        return None
+    if ',' in texto:
+        texto = texto.replace(',', '.')
+    try:
+        return float(texto)
+    except ValueError:
+        return None
+
 def limpar_plu(valor):
     if pd.isna(valor):
         return ""
@@ -26,7 +39,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador Inteligente - Nagumo", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Validador & Auditor de Descontos - Nagumo", layout="wide", page_icon="🎯")
 
 st.markdown("""
     <style>
@@ -39,8 +52,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Validador Inteligente com Tratamento Correto de Clusters (SP & Rio)")
-st.markdown("Audita estritamente os PLUs válidos e sinaliza corretamente os itens com traço (-) como 'Não se aplica'.")
+st.title("🎯 Validador Inteligente com Auditoria de % de Desconto")
+st.markdown("Valida preços por PLU, trata os traços (-) dos clusters e audita se a matemática da percentagem de desconto está correta.")
 
 # --- INTERFACE DO USUÁRIO ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -55,9 +68,9 @@ with col_rio:
 
 st.markdown("---")
 
-if st.button("🚀 Executar Validação"):
+if st.button("🚀 Executar Validação e Auditoria"):
     if arquivo_excel and (html_sp_file or html_rio_file):
-        with st.spinner("A processar dados e a aplicar regras de exclusão por traço (-)..."):
+        with st.spinner("A processar dados, auditar descontos e validar HTMLs..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -83,8 +96,8 @@ if st.button("🚀 Executar Validação"):
             row_sub = df_raw.iloc[linha_plu_idx + 1].values if linha_plu_idx + 1 < len(df_raw) else []
             
             col_plu_idx = -1; col_prod_idx = -1
-            sp_preco_idx = -1; sp_oferta_idx = -1
-            rio_preco_idx = -1; rio_oferta_idx = -1
+            sp_preco_idx = -1; sp_oferta_idx = -1; sp_desc_idx = -1
+            rio_preco_idx = -1; rio_oferta_idx = -1; rio_desc_idx = -1
             
             cluster_atual = ""
             for i in range(len(row_main)):
@@ -101,9 +114,11 @@ if st.button("🚀 Executar Validação"):
                 if cluster_atual == "SP":
                     if "PREÇO" in sub_val or "PRECO" in sub_val: sp_preco_idx = i
                     elif "OFERTA" in sub_val and "CART" not in sub_val: sp_oferta_idx = i
+                    elif "%" in sub_val or "DESCONTO" in sub_val: sp_desc_idx = i
                 elif cluster_atual == "RIO":
                     if "PREÇO" in sub_val or "PRECO" in sub_val: rio_preco_idx = i
                     elif "OFERTA" in sub_val and "CART" not in sub_val: rio_oferta_idx = i
+                    elif "%" in sub_val or "DESCONTO" in sub_val: rio_desc_idx = i
 
             if col_prod_idx == -1:
                 col_prod_idx = col_plu_idx + 1
@@ -123,22 +138,41 @@ if st.button("🚀 Executar Validação"):
                 
                 nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else "Produto"
                 
+                # SP Valores
                 val_de_sp = row.iloc[sp_preco_idx] if sp_preco_idx != -1 and sp_preco_idx < len(row) else None
                 val_of_sp = row.iloc[sp_oferta_idx] if sp_oferta_idx != -1 and sp_oferta_idx < len(row) else None
-                
-                val_de_rio = row.iloc[rio_preco_idx] if rio_preco_idx != -1 and rio_preco_idx < len(row) else None
-                val_of_rio = row.iloc[rio_oferta_idx] if rio_oferta_idx != -1 and rio_oferta_idx < len(row) else None
+                val_desc_sp = row.iloc[sp_desc_idx] if sp_desc_idx != -1 and sp_desc_idx < len(row) else None
 
                 de_sp = limpar_preco(val_de_sp)
                 oferta_sp = limpar_preco(val_of_sp)
+                desc_plan_sp = limpar_desconto(val_desc_sp)
+                
+                # Rio Valores
+                val_de_rio = row.iloc[rio_preco_idx] if rio_preco_idx != -1 and rio_preco_idx < len(row) else None
+                val_of_rio = row.iloc[rio_oferta_idx] if rio_oferta_idx != -1 and rio_oferta_idx < len(row) else None
+                val_desc_rio = row.iloc[rio_desc_idx] if rio_desc_idx != -1 and rio_desc_idx < len(row) else None
+
                 de_rio = limpar_preco(val_de_rio)
                 oferta_rio = limpar_preco(val_of_rio)
+                desc_plan_rio = limpar_desconto(val_desc_rio)
                 
-                # Blindagem Comercial (apenas se ambos forem números válidos)
-                if isinstance(oferta_sp, float) and isinstance(de_sp, float) and oferta_sp >= de_sp:
-                    alertas_comerciais.append(f"🚨 **SP [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_sp:.2f}) >= De (R${de_sp:.2f})")
-                if isinstance(oferta_rio, float) and isinstance(de_rio, float) and oferta_rio >= de_rio:
-                    alertas_comerciais.append(f"🚨 **Rio [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_rio:.2f}) >= De (R${de_rio:.2f})")
+                # Blindagem Comercial e Auditoria de Desconto SP
+                if isinstance(oferta_sp, float) and isinstance(de_sp, float):
+                    if oferta_sp >= de_sp:
+                        alertas_comerciais.append(f"🚨 **SP [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_sp:.2f}) >= De (R${de_sp:.2f})")
+                    else:
+                        calc_desc = round(((de_sp - oferta_sp) / de_sp) * 100)
+                        if desc_plan_sp is not None and abs(calc_desc - desc_plan_sp) > 1:
+                            alertas_comerciais.append(f"⚠️ **SP [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_sp}% vs Calculado: {calc_desc}%")
+
+                # Blindagem Comercial e Auditoria de Desconto Rio
+                if isinstance(oferta_rio, float) and isinstance(de_rio, float):
+                    if oferta_rio >= de_rio:
+                        alertas_comerciais.append(f"🚨 **Rio [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_rio:.2f}) >= De (R${de_rio:.2f})")
+                    else:
+                        calc_desc = round(((de_rio - oferta_rio) / de_rio) * 100)
+                        if desc_plan_rio is not None and abs(calc_desc - desc_plan_rio) > 1:
+                            alertas_comerciais.append(f"⚠️ **Rio [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_rio}% vs Calculado: {calc_desc}%")
 
                 registros_sp.append({'plu': plu, 'nome': nome, 'de': de_sp, 'oferta': oferta_sp, 'val_of_raw': val_of_sp})
                 registros_rio.append({'plu': plu, 'nome': nome, 'de': de_rio, 'oferta': oferta_rio, 'val_of_raw': val_of_rio})
@@ -152,21 +186,19 @@ if st.button("🚀 Executar Validação"):
                     of_ex = item['oferta']
                     val_of_raw = item['val_of_raw']
 
-                    # Verifica rigorosamente se tem traço ou indicador de ausência no cluster
                     is_traco = pd.isna(val_of_raw) or str(val_of_raw).strip() in ['-', 'X', 'NAN', ''] or of_ex == "NAO_APLICA"
 
                     if is_traco:
                         resultados.append({
                             "PLU": plu,
                             "Produto": nome,
-                            "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / -" if isinstance(de_ex, float) else "R$ -- / -",
+                            "Planilha (De / Oferta)": "Não aplicável (-)",
                             "HTML (De / Oferta)": "Ignorado",
                             "Status": "ℹ️ Não se aplica",
-                            "Detalhes": f"Este item possui '-' na planilha e não pertence ao cluster {nome_cluster}."
+                            "Detalhes": f"Item com '-' na planilha, não pertence ao cluster {nome_cluster}."
                         })
                         continue
 
-                    # Se o item é ativo na planilha para este cluster, valida estritamente no HTML
                     tag_plu = soup_obj.find(id=plu) or soup_obj.find(attrs={"data-plu": plu})
                     if not tag_plu:
                         for el in soup_obj.find_all(True):
@@ -232,7 +264,7 @@ if st.button("🚀 Executar Validação"):
 
             # --- EXIBIÇÃO DE ALERTAS ---
             if alertas_comerciais:
-                st.error("🚨 **ATENÇÃO: Inconsistências lógicas na planilha do comercial!**")
+                st.error("🚨 **ATENÇÃO: Inconsistências lógicas ou de desconto detetadas na planilha do comercial!**")
                 for alerta in alertas_comerciais:
                     st.warning(alerta)
                 st.markdown("---")
