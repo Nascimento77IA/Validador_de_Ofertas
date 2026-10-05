@@ -21,13 +21,24 @@ def limpar_preco(valor):
 def limpar_desconto(valor):
     if pd.isna(valor):
         return None
+    
+    # Se o pandas/excel ler diretamente como float decimal (ex: 0.1347 para 13%)
+    if isinstance(valor, (int, float)):
+        if 0 < float(valor) < 1:
+            return round(float(valor) * 100)
+        return round(float(valor))
+
     texto = str(valor).upper().replace('%', '').replace(' ', '').strip()
     if texto in ['', 'X', 'NAN', '-']:
         return None
     if ',' in texto:
         texto = texto.replace(',', '.')
     try:
-        return float(texto)
+        num = float(texto)
+        # Se vier como decimal fracionado (ex: '0.13')
+        if 0 < num < 1:
+            return round(num * 100)
+        return round(num)
     except ValueError:
         return None
 
@@ -40,7 +51,6 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 def arredondar_comercial(valor):
-    # Regra: >= .50 arredonda para cima, < .50 arredonda para baixo
     return math.floor(valor + 0.5)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
@@ -58,7 +68,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🎯 Validador Inteligente com Auditoria de Desconto (Regra Comercial)")
-st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto aplicando o arredondamento comercial correto (>= .50 sobe).")
+st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto aplicando o arredondamento comercial correto.")
 
 # --- INTERFACE DO UTILIZADOR ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -161,7 +171,7 @@ if st.button("🚀 Executar Validação e Auditoria"):
                 oferta_rio = limpar_preco(val_of_rio)
                 desc_plan_rio = limpar_desconto(val_desc_rio)
                 
-                # SP - Auditoria Comercial e Desconto com Arredondamento Comercial
+                # SP - Auditoria
                 if isinstance(oferta_sp, float) and isinstance(de_sp, float):
                     if oferta_sp >= de_sp:
                         alertas_comerciais.append(f"🚨 **SP [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_sp:.2f}) >= De (R${de_sp:.2f})")
@@ -169,9 +179,9 @@ if st.button("🚀 Executar Validação e Auditoria"):
                         calc_exato = ((de_sp - oferta_sp) / de_sp) * 100
                         calc_desc = arredondar_comercial(calc_exato)
                         if desc_plan_sp is not None and abs(calc_desc - desc_plan_sp) > 0:
-                            alertas_comerciais.append(f"⚠️ **SP [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_sp}% vs Calculado: {calc_desc}% (Exato: {calc_exato:.2f}%)")
+                            alertas_comerciais.append(f"⚠️ **SP [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_sp}% vs Calculado: {calc_desc}%")
 
-                # Rio - Auditoria Comercial e Desconto com Arredondamento Comercial
+                # Rio - Auditoria
                 if isinstance(oferta_rio, float) and isinstance(de_rio, float):
                     if oferta_rio >= de_rio:
                         alertas_comerciais.append(f"🚨 **Rio [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_rio:.2f}) >= De (R${de_rio:.2f})")
@@ -179,7 +189,7 @@ if st.button("🚀 Executar Validação e Auditoria"):
                         calc_exato = ((de_rio - oferta_rio) / de_rio) * 100
                         calc_desc = arredondar_comercial(calc_exato)
                         if desc_plan_rio is not None and abs(calc_desc - desc_plan_rio) > 0:
-                            alertas_comerciais.append(f"⚠️ **Rio [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_rio}% vs Calculado: {calc_desc}% (Exato: {calc_exato:.2f}%)")
+                            alertas_comerciais.append(f"⚠️ **Rio [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_rio}% vs Calculado: {calc_desc}%")
 
                 registros_sp.append({'plu': plu, 'nome': nome, 'de': de_sp, 'oferta': oferta_sp, 'val_of_raw': val_of_sp})
                 registros_rio.append({'plu': plu, 'nome': nome, 'de': de_rio, 'oferta': oferta_rio, 'val_of_raw': val_of_rio})
@@ -306,7 +316,7 @@ if st.button("🚀 Executar Validação e Auditoria"):
                         if prob_rio == 0:
                             st.success("✅ Nenhum erro real encontrado no Rio!")
                         else:
-                            st.error(f"⚠️️ Foram encontrados {prob_rio} problemas reais no Rio.")
+                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
             else:
                 st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
     else:
