@@ -40,7 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("⚡ Validador Inteligente com Tratamento Correto de Clusters (SP & Rio)")
-st.markdown("Audita estritamente os PLUs válidos e diferencia claramente o que não se aplica (-).")
+st.markdown("Audita estritamente os PLUs válidos e sinaliza corretamente os itens com traço (-) como 'Não se aplica'.")
 
 # --- INTERFACE DO USUÁRIO ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -134,7 +134,7 @@ if st.button("🚀 Executar Validação"):
                 de_rio = limpar_preco(val_de_rio)
                 oferta_rio = limpar_preco(val_of_rio)
                 
-                # Blindagem Comercial
+                # Blindagem Comercial (apenas se ambos forem números válidos)
                 if isinstance(oferta_sp, float) and isinstance(de_sp, float) and oferta_sp >= de_sp:
                     alertas_comerciais.append(f"🚨 **SP [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_sp:.2f}) >= De (R${de_sp:.2f})")
                 if isinstance(oferta_rio, float) and isinstance(de_rio, float) and oferta_rio >= de_rio:
@@ -153,13 +153,13 @@ if st.button("🚀 Executar Validação"):
                     val_of_raw = item['val_of_raw']
 
                     # Verifica rigorosamente se tem traço ou indicador de ausência no cluster
-                    is_traco = pd.isna(val_of_raw) or str(val_of_raw).strip() in ['-', 'X', 'NAN', '']
+                    is_traco = pd.isna(val_of_raw) or str(val_of_raw).strip() in ['-', 'X', 'NAN', ''] or of_ex == "NAO_APLICA"
 
                     if is_traco:
                         resultados.append({
                             "PLU": plu,
                             "Produto": nome,
-                            "Planilha (De / Oferta)": "Não aplicável (-)",
+                            "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / -" if isinstance(de_ex, float) else "R$ -- / -",
                             "HTML (De / Oferta)": "Ignorado",
                             "Status": "ℹ️ Não se aplica",
                             "Detalhes": f"Este item possui '-' na planilha e não pertence ao cluster {nome_cluster}."
@@ -267,7 +267,7 @@ if st.button("🚀 Executar Validação"):
                         if prob_rio == 0:
                             st.success("✅ Nenhum erro real encontrado no Rio!")
                         else:
-                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio (como PLUs ausentes ou divergências).")
+                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
             else:
                 st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
     else:
