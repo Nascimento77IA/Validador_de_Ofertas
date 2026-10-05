@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 # --- FUNÇÕES DE LIMPEZA E FILTRAGEM ---
 def limpar_preco(valor):
     if pd.isna(valor):
-        return None
+        return "NAO_APLICA"
     texto = str(valor).upper().replace('R$', '').replace(' ', '').strip()
     if texto in ['', 'X', 'NAN', '-']:
         return "NAO_APLICA"
@@ -26,7 +26,7 @@ def limpar_plu(valor):
     return re.sub(r'\D', '', texto)
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Validador Flexível - Nagumo", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="Validador Inteligente - Nagumo", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
@@ -39,8 +39,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Validador Flexível (SP e/ou Rio)")
-st.markdown("Suba a planilha e o(s) HTML(s) que deseja validar. O sistema adapta-se automaticamente aos ficheiros enviados.")
+st.title("⚡ Validador Inteligente com Tratamento de Clusters (SP & Rio)")
+st.markdown("Trata corretamente os itens com '-' na planilha, exibindo avisos informativos em vez de falsos erros.")
 
 # --- INTERFACE DO USUÁRIO ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -57,7 +57,7 @@ st.markdown("---")
 
 if st.button("🚀 Executar Validação"):
     if arquivo_excel and (html_sp_file or html_rio_file):
-        with st.spinner("Processando dados e auditando os HTMLs fornecidos..."):
+        with st.spinner("Processando dados e aplicando regras de clusters..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -110,8 +110,8 @@ if st.button("🚀 Executar Validação"):
 
             df_excel = df_raw.iloc[linha_plu_idx + 2:].reset_index(drop=True)
 
-            dados_sp = {}
-            dados_rio = {}
+            registros_sp = []
+            registros_rio = []
             alertas_comerciais = []
 
             for _, row in df_excel.iterrows():
@@ -123,11 +123,17 @@ if st.button("🚀 Executar Validação"):
                 
                 nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else "Produto"
                 
-                de_sp = limpar_preco(row.iloc[sp_preco_idx]) if sp_preco_idx != -1 and sp_preco_idx < len(row) else "NAO_APLICA"
-                oferta_sp = limpar_preco(row.iloc[sp_oferta_idx]) if sp_oferta_idx != -1 and sp_oferta_idx < len(row) else "NAO_APLICA"
+                # Valores brutos da planilha
+                val_de_sp = row.iloc[sp_preco_idx] if sp_preco_idx != -1 and sp_preco_idx < len(row) else None
+                val_of_sp = row.iloc[sp_oferta_idx] if sp_oferta_idx != -1 and sp_oferta_idx < len(row) else None
                 
-                de_rio = limpar_preco(row.iloc[rio_preco_idx]) if rio_preco_idx != -1 and rio_preco_idx < len(row) else "NAO_APLICA"
-                oferta_rio = limpar_preco(row.iloc[rio_oferta_idx]) if rio_oferta_idx != -1 and rio_oferta_idx < len(row) else "NAO_APLICA"
+                val_de_rio = row.iloc[rio_preco_idx] if rio_preco_idx != -1 and rio_preco_idx < len(row) else None
+                val_of_rio = row.iloc[rio_oferta_idx] if rio_oferta_idx != -1 and rio_oferta_idx < len(row) else None
+
+                de_sp = limpar_preco(val_de_sp)
+                oferta_sp = limpar_preco(val_of_sp)
+                de_rio = limpar_preco(val_de_rio)
+                oferta_rio = limpar_preco(val_of_rio)
                 
                 # Blindagem Comercial
                 if isinstance(oferta_sp, float) and isinstance(de_sp, float) and oferta_sp >= de_sp:
@@ -135,14 +141,33 @@ if st.button("🚀 Executar Validação"):
                 if isinstance(oferta_rio, float) and isinstance(de_rio, float) and oferta_rio >= de_rio:
                     alertas_comerciais.append(f"🚨 **Rio [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_rio:.2f}) >= De (R${de_rio:.2f})")
 
-                if oferta_sp != "NAO_APLICA":
-                    dados_sp[plu] = {'nome': nome, 'de': de_sp if isinstance(de_sp, float) else None, 'oferta': oferta_sp}
-                if oferta_rio != "NAO_APLICA":
-                    dados_rio[plu] = {'nome': nome, 'de': de_rio if isinstance(de_rio, float) else None, 'oferta': oferta_rio}
+                registros_sp.append({'plu': plu, 'nome': nome, 'de': de_sp, 'oferta': oferta_sp, 'val_of_raw': val_of_sp})
+                registros_rio.append({'plu': plu, 'nome': nome, 'de': de_rio, 'oferta': oferta_rio, 'val_of_raw': val_of_rio})
 
-            def validar_cluster(mapa_cluster, soup_obj, nome_cluster):
+            def validar_cluster(registros, soup_obj, nome_cluster):
                 resultados = []
-                for plu, dados_ex in mapa_cluster.items():
+                for item in registros:
+                    plu = item['plu']
+                    nome = item['nome']
+                    de_ex = item['de']
+                    of_ex = item['oferta']
+                    val_of_raw = item['val_of_raw']
+
+                    # Verifica se é um item com traço ou não aplicável para este cluster
+                    is_traco = pd.isna(val_of_raw) or str(val_of_raw).strip() in ['-', 'X', 'NAN', '']
+
+                    if is_traco:
+                        resultados.append({
+                            "PLU": plu,
+                            "Produto": nome,
+                            "Planilha (De / Oferta)": "Não aplicável (-)",
+                            "HTML (De / Oferta)": "Ignorado",
+                            "Status": "ℹ️ Não se aplica",
+                            "Detalhes": f"Este item possui '-' na planilha e não pertence ao cluster {nome_cluster}."
+                        })
+                        continue
+
+                    # Se tem oferta válida, busca no HTML
                     tag_plu = soup_obj.find(id=plu) or soup_obj.find(attrs={"data-plu": plu})
                     if not tag_plu:
                         for el in soup_obj.find_all(True):
@@ -152,8 +177,9 @@ if st.button("🚀 Executar Validação"):
 
                     if not tag_plu:
                         resultados.append({
-                            "PLU": plu, "Produto": dados_ex['nome'],
-                            "Planilha (De / Oferta)": f"R$ {dados_ex['de']:.2f} / R$ {dados_ex['oferta']:.2f}" if dados_ex['de'] and dados_ex['oferta'] else "N/D",
+                            "PLU": plu,
+                            "Produto": nome,
+                            "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if isinstance(de_ex, float) and isinstance(of_ex, float) else "N/D",
                             "HTML (De / Oferta)": "Não encontrado",
                             "Status": "⚠️ PLU Ausente no HTML",
                             "Detalhes": f"Produto ativo na planilha de {nome_cluster} mas ausente no respetivo HTML."
@@ -173,19 +199,19 @@ if st.button("🚀 Executar Validação"):
                     
                     status = "✅ OK"
                     erros_detalhes = []
-                    de_ex, of_ex = dados_ex['de'], dados_ex['oferta']
                     
-                    if de_html is not None and de_ex is not None and abs(de_html - de_ex) > 0.01:
+                    if de_html is not None and isinstance(de_ex, float) and abs(de_html - de_ex) > 0.01:
                         status = "❌ Erro Preço DE"
                         erros_detalhes.append(f"DE HTML R${de_html:.2f} != Planilha R${de_ex:.2f}")
                     
-                    if oferta_html is not None and of_ex is not None and abs(oferta_html - of_ex) > 0.01:
+                    if oferta_html is not None and isinstance(of_ex, float) and abs(oferta_html - of_ex) > 0.01:
                         status = "❌ Erro Oferta" if status == "✅ OK" else status + " | Erro Oferta"
                         erros_detalhes.append(f"Oferta HTML R${oferta_html:.2f} != Planilha R${of_ex:.2f}")
 
                     resultados.append({
-                        "PLU": plu, "Produto": dados_ex['nome'],
-                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if de_ex is not None and of_ex is not None else "Não definido",
+                        "PLU": plu,
+                        "Produto": nome,
+                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if isinstance(de_ex, float) and isinstance(of_ex, float) else "Não definido",
                         "HTML (De / Oferta)": f"R$ {de_html:.2f} / R$ {oferta_html:.2f}" if de_html is not None and oferta_html is not None else "Não lido",
                         "Status": status,
                         "Detalhes": " | ".join(erros_detalhes) if erros_detalhes else "Preços conferem"
@@ -198,12 +224,12 @@ if st.button("🚀 Executar Validação"):
             if html_sp_file:
                 html_sp_file.seek(0)
                 soup_sp = BeautifulSoup(html_sp_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
-                res_sp = validar_cluster(dados_sp, soup_sp, "Nagumo SP")
+                res_sp = validar_cluster(registros_sp, soup_sp, "Nagumo SP")
 
             if html_rio_file:
                 html_rio_file.seek(0)
                 soup_rio = BeautifulSoup(html_rio_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
-                res_rio = validar_cluster(dados_rio, soup_rio, "Nagumo Rio")
+                res_rio = validar_cluster(registros_rio, soup_rio, "Nagumo Rio")
 
             # --- EXIBIÇÃO DE ALERTAS ---
             if alertas_comerciais:
@@ -223,27 +249,27 @@ if st.button("🚀 Executar Validação"):
                 
                 if html_sp_file:
                     with tabs[tab_idx]:
-                        st.markdown(f"### Relatório SP ({len(dados_sp)} itens válidos)")
+                        st.markdown(f"### Relatório SP ({len(res_sp)} itens analisados)")
                         df_sp = pd.DataFrame(res_sp)
                         st.dataframe(df_sp, use_container_width=True)
                         prob_sp = sum(1 for r in res_sp if "❌" in r["Status"] or "⚠️" in r["Status"])
                         if prob_sp == 0:
-                            st.success("✅ Todos os PLUs válidos em SP conferem perfeitamente com o HTML.")
+                            st.success("✅ Nenhum erro encontrado em SP!")
                         else:
-                            st.error(f"⚠️ Foram encontrados {prob_sp} problemas em SP.")
+                            st.error(f"⚠️ Foram encontrados {prob_sp} problemas reais em SP.")
                     tab_idx += 1
 
                 if html_rio_file:
                     with tabs[tab_idx]:
-                        st.markdown(f"### Relatório Rio ({len(dados_rio)} itens válidos)")
+                        st.markdown(f"### Relatório Rio ({len(res_rio)} itens analisados)")
                         df_rio = pd.DataFrame(res_rio)
                         st.dataframe(df_rio, use_container_width=True)
                         prob_rio = sum(1 for r in res_rio if "❌" in r["Status"] or "⚠️" in r["Status"])
                         if prob_rio == 0:
-                            st.success("✅ Todos os PLUs válidos no Rio conferem perfeitamente com o HTML.")
+                            st.success("✅ Nenhum erro encontrado no Rio!")
                         else:
-                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas no Rio.")
+                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
             else:
-                st.warning("Carrege pelo menos um arquivo HTML (SP ou Rio) para realizar a validação.")
+                st.warning("Carrege pelo menos um arquivo HTML para realizar a validação.")
     else:
-        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos arquivos HTML (SP ou Rio).")
+        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos arquivos HTML.")
