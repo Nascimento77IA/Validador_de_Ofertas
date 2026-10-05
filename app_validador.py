@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 import re
+import math
 from bs4 import BeautifulSoup
 
-# --- FUNÇÕES DE LIMPEZA E FILTRAGEM ---
+# --- FUNÇÕES DE LIMPEZA E ARREDONDAMENTO COMERCIAL ---
 def limpar_preco(valor):
     if pd.isna(valor):
         return "NAO_APLICA"
@@ -38,6 +39,10 @@ def limpar_plu(valor):
         texto = texto[:-2]
     return re.sub(r'\D', '', texto)
 
+def arredondar_comercial(valor):
+    # Regra: >= .50 arredonda para cima, < .50 arredonda para baixo
+    return math.floor(valor + 0.5)
+
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Validador & Auditor de Descontos - Nagumo", layout="wide", page_icon="🎯")
 
@@ -52,8 +57,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 Validador Inteligente com Auditoria de % de Desconto")
-st.markdown("Valida preços por PLU, trata os traços (-) dos clusters e audita se a matemática da percentagem de desconto está correta.")
+st.title("🎯 Validador Inteligente com Auditoria de Desconto (Regra Comercial)")
+st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto aplicando o arredondamento comercial correto (>= .50 sobe).")
 
 # --- INTERFACE DO USUÁRIO ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -70,7 +75,7 @@ st.markdown("---")
 
 if st.button("🚀 Executar Validação e Auditoria"):
     if arquivo_excel and (html_sp_file or html_rio_file):
-        with st.spinner("A processar dados, auditar descontos e validar HTMLs..."):
+        with st.spinner("A processar dados, aplicar arredondamento comercial e validar HTMLs..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -156,23 +161,25 @@ if st.button("🚀 Executar Validação e Auditoria"):
                 oferta_rio = limpar_preco(val_of_rio)
                 desc_plan_rio = limpar_desconto(val_desc_rio)
                 
-                # Blindagem Comercial e Auditoria de Desconto SP
+                # SP - Auditoria Comercial e Desconto com Arredondamento Comercial
                 if isinstance(oferta_sp, float) and isinstance(de_sp, float):
                     if oferta_sp >= de_sp:
                         alertas_comerciais.append(f"🚨 **SP [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_sp:.2f}) >= De (R${de_sp:.2f})")
                     else:
-                        calc_desc = round(((de_sp - oferta_sp) / de_sp) * 100)
-                        if desc_plan_sp is not None and abs(calc_desc - desc_plan_sp) > 1:
-                            alertas_comerciais.append(f"⚠️ **SP [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_sp}% vs Calculado: {calc_desc}%")
+                        calc_exato = ((de_sp - oferta_sp) / de_sp) * 100
+                        calc_desc = arredondar_comercial(calc_exato)
+                        if desc_plan_sp is not None and abs(calc_desc - desc_plan_sp) > 0:
+                            alertas_comerciais.append(f"⚠️ **SP [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_sp}% vs Calculado: {calc_desc}% (Exato: {calc_exato:.2f}%)")
 
-                # Blindagem Comercial e Auditoria de Desconto Rio
+                # Rio - Auditoria Comercial e Desconto com Arredondamento Comercial
                 if isinstance(oferta_rio, float) and isinstance(de_rio, float):
                     if oferta_rio >= de_rio:
                         alertas_comerciais.append(f"🚨 **Rio [Erro Comercial]** | {nome} (PLU: {plu}) | Oferta (R${oferta_rio:.2f}) >= De (R${de_rio:.2f})")
                     else:
-                        calc_desc = round(((de_rio - oferta_rio) / de_rio) * 100)
-                        if desc_plan_rio is not None and abs(calc_desc - desc_plan_rio) > 1:
-                            alertas_comerciais.append(f"⚠️ **Rio [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_rio}% vs Calculado: {calc_desc}%")
+                        calc_exato = ((de_rio - oferta_rio) / de_rio) * 100
+                        calc_desc = arredondar_comercial(calc_exato)
+                        if desc_plan_rio is not None and abs(calc_desc - desc_plan_rio) > 0:
+                            alertas_comerciais.append(f"⚠️ **Rio [Divergência de Desconto]** | {nome} (PLU: {plu}) | Informado: {desc_plan_rio}% vs Calculado: {calc_desc}% (Exato: {calc_exato:.2f}%)")
 
                 registros_sp.append({'plu': plu, 'nome': nome, 'de': de_sp, 'oferta': oferta_sp, 'val_of_raw': val_of_sp})
                 registros_rio.append({'plu': plu, 'nome': nome, 'de': de_rio, 'oferta': oferta_rio, 'val_of_raw': val_of_rio})
@@ -242,65 +249,4 @@ if st.button("🚀 Executar Validação e Auditoria"):
                     resultados.append({
                         "PLU": plu,
                         "Produto": nome,
-                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if isinstance(de_ex, float) and isinstance(of_ex, float) else "Não definido",
-                        "HTML (De / Oferta)": f"R$ {de_html:.2f} / R$ {oferta_html:.2f}" if de_html is not None and oferta_html is not None else "Não lido",
-                        "Status": status,
-                        "Detalhes": " | ".join(erros_detalhes) if erros_detalhes else "Preços conferem"
-                    })
-                return resultados
-
-            res_sp = []
-            res_rio = []
-
-            if html_sp_file:
-                html_sp_file.seek(0)
-                soup_sp = BeautifulSoup(html_sp_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
-                res_sp = validar_cluster(registros_sp, soup_sp, "Nagumo SP")
-
-            if html_rio_file:
-                html_rio_file.seek(0)
-                soup_rio = BeautifulSoup(html_rio_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
-                res_rio = validar_cluster(registros_rio, soup_rio, "Nagumo Rio")
-
-            # --- EXIBIÇÃO DE ALERTAS ---
-            if alertas_comerciais:
-                st.error("🚨 **ATENÇÃO: Inconsistências lógicas ou de desconto detetadas na planilha do comercial!**")
-                for alerta in alertas_comerciais:
-                    st.warning(alerta)
-                st.markdown("---")
-
-            # --- ABAS DINÂMICAS ---
-            abas_nomes = []
-            if html_sp_file: abas_nomes.append("🏢 Cluster Nagumo SP (Lojas)")
-            if html_rio_file: abas_nomes.append("🌴 Cluster Nagumo Rio")
-
-            if abas_nomes:
-                tabs = st.tabs(abas_nomes)
-                tab_idx = 0
-                
-                if html_sp_file:
-                    with tabs[tab_idx]:
-                        st.markdown(f"### Relatório SP ({len(res_sp)} itens processados)")
-                        df_sp = pd.DataFrame(res_sp)
-                        st.dataframe(df_sp, use_container_width=True)
-                        prob_sp = sum(1 for r in res_sp if "❌" in r["Status"] or "⚠️" in r["Status"])
-                        if prob_sp == 0:
-                            st.success("✅ Nenhum erro real encontrado em SP!")
-                        else:
-                            st.error(f"⚠️ Foram encontrados {prob_sp} problemas reais em SP.")
-                    tab_idx += 1
-
-                if html_rio_file:
-                    with tabs[tab_idx]:
-                        st.markdown(f"### Relatório Rio ({len(res_rio)} itens processados)")
-                        df_rio = pd.DataFrame(res_rio)
-                        st.dataframe(df_rio, use_container_width=True)
-                        prob_rio = sum(1 for r in res_rio if "❌" in r["Status"] or "⚠️" in r["Status"])
-                        if prob_rio == 0:
-                            st.success("✅ Nenhum erro real encontrado no Rio!")
-                        else:
-                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
-            else:
-                st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
-    else:
-        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos ficheiros HTML.")
+                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f}
