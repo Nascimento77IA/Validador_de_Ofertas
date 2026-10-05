@@ -39,8 +39,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Validador Inteligente com Tratamento de Clusters (SP & Rio)")
-st.markdown("Trata corretamente os itens com '-' na planilha, exibindo avisos informativos em vez de falsos erros.")
+st.title("⚡ Validador Inteligente com Tratamento Correto de Clusters (SP & Rio)")
+st.markdown("Audita estritamente os PLUs válidos e diferencia claramente o que não se aplica (-).")
 
 # --- INTERFACE DO USUÁRIO ---
 st.markdown("### 📁 Carregamento de Ficheiros")
@@ -57,7 +57,7 @@ st.markdown("---")
 
 if st.button("🚀 Executar Validação"):
     if arquivo_excel and (html_sp_file or html_rio_file):
-        with st.spinner("Processando dados e aplicando regras de clusters..."):
+        with st.spinner("A processar dados e a aplicar regras de exclusão por traço (-)..."):
             
             # --- LER EXCEL ---
             arquivo_excel.seek(0)
@@ -123,7 +123,6 @@ if st.button("🚀 Executar Validação"):
                 
                 nome = str(row.iloc[col_prod_idx]) if col_prod_idx < len(row) else "Produto"
                 
-                # Valores brutos da planilha
                 val_de_sp = row.iloc[sp_preco_idx] if sp_preco_idx != -1 and sp_preco_idx < len(row) else None
                 val_of_sp = row.iloc[sp_oferta_idx] if sp_oferta_idx != -1 and sp_oferta_idx < len(row) else None
                 
@@ -153,7 +152,7 @@ if st.button("🚀 Executar Validação"):
                     of_ex = item['oferta']
                     val_of_raw = item['val_of_raw']
 
-                    # Verifica se é um item com traço ou não aplicável para este cluster
+                    # Verifica rigorosamente se tem traço ou indicador de ausência no cluster
                     is_traco = pd.isna(val_of_raw) or str(val_of_raw).strip() in ['-', 'X', 'NAN', '']
 
                     if is_traco:
@@ -167,7 +166,7 @@ if st.button("🚀 Executar Validação"):
                         })
                         continue
 
-                    # Se tem oferta válida, busca no HTML
+                    # Se o item é ativo na planilha para este cluster, valida estritamente no HTML
                     tag_plu = soup_obj.find(id=plu) or soup_obj.find(attrs={"data-plu": plu})
                     if not tag_plu:
                         for el in soup_obj.find_all(True):
@@ -249,27 +248,27 @@ if st.button("🚀 Executar Validação"):
                 
                 if html_sp_file:
                     with tabs[tab_idx]:
-                        st.markdown(f"### Relatório SP ({len(res_sp)} itens analisados)")
+                        st.markdown(f"### Relatório SP ({len(res_sp)} itens processados)")
                         df_sp = pd.DataFrame(res_sp)
                         st.dataframe(df_sp, use_container_width=True)
                         prob_sp = sum(1 for r in res_sp if "❌" in r["Status"] or "⚠️" in r["Status"])
                         if prob_sp == 0:
-                            st.success("✅ Nenhum erro encontrado em SP!")
+                            st.success("✅ Nenhum erro real encontrado em SP!")
                         else:
                             st.error(f"⚠️ Foram encontrados {prob_sp} problemas reais em SP.")
                     tab_idx += 1
 
                 if html_rio_file:
                     with tabs[tab_idx]:
-                        st.markdown(f"### Relatório Rio ({len(res_rio)} itens analisados)")
+                        st.markdown(f"### Relatório Rio ({len(res_rio)} itens processados)")
                         df_rio = pd.DataFrame(res_rio)
                         st.dataframe(df_rio, use_container_width=True)
                         prob_rio = sum(1 for r in res_rio if "❌" in r["Status"] or "⚠️" in r["Status"])
                         if prob_rio == 0:
-                            st.success("✅ Nenhum erro encontrado no Rio!")
+                            st.success("✅ Nenhum erro real encontrado no Rio!")
                         else:
-                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio.")
+                            st.error(f"⚠️ Foram encontrados {prob_rio} problemas reais no Rio (como PLUs ausentes ou divergências).")
             else:
-                st.warning("Carrege pelo menos um arquivo HTML para realizar a validação.")
+                st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
     else:
-        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos arquivos HTML.")
+        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos ficheiros HTML.")
