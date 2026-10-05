@@ -60,7 +60,7 @@ st.markdown("""
 st.title("🎯 Validador Inteligente com Auditoria de Desconto (Regra Comercial)")
 st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto aplicando o arredondamento comercial correto (>= .50 sobe).")
 
-# --- INTERFACE DO USUÁRIO ---
+# --- INTERFACE DO UTILIZADOR ---
 st.markdown("### 📁 Carregamento de Ficheiros")
 col_exc, col_sp, col_rio = st.columns(3)
 
@@ -249,4 +249,65 @@ if st.button("🚀 Executar Validação e Auditoria"):
                     resultados.append({
                         "PLU": plu,
                         "Produto": nome,
-                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f}
+                        "Planilha (De / Oferta)": f"R$ {de_ex:.2f} / R$ {of_ex:.2f}" if isinstance(de_ex, float) and isinstance(of_ex, float) else "Não definido",
+                        "HTML (De / Oferta)": f"R$ {de_html:.2f} / R$ {oferta_html:.2f}" if de_html is not None and oferta_html is not None else "Não lido",
+                        "Status": status,
+                        "Detalhes": " | ".join(erros_detalhes) if erros_detalhes else "Preços conferem"
+                    })
+                return resultados
+
+            res_sp = []
+            res_rio = []
+
+            if html_sp_file:
+                html_sp_file.seek(0)
+                soup_sp = BeautifulSoup(html_sp_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
+                res_sp = validar_cluster(registros_sp, soup_sp, "Nagumo SP")
+
+            if html_rio_file:
+                html_rio_file.seek(0)
+                soup_rio = BeautifulSoup(html_rio_file.getvalue().decode('utf-8', errors='replace'), 'html.parser')
+                res_rio = validar_cluster(registros_rio, soup_rio, "Nagumo Rio")
+
+            # --- EXIBIÇÃO DE ALERTAS ---
+            if alertas_comerciais:
+                st.error("🚨 **ATENÇÃO: Inconsistências lógicas ou de desconto detetadas na planilha!**")
+                for alerta in alertas_comerciais:
+                    st.warning(alerta)
+                st.markdown("---")
+
+            # --- ABAS DINÂMICAS ---
+            abas_nomes = []
+            if html_sp_file: abas_nomes.append("🏢 Cluster Nagumo SP (Lojas)")
+            if html_rio_file: abas_nomes.append("🌴 Cluster Nagumo Rio")
+
+            if abas_nomes:
+                tabs = st.tabs(abas_nomes)
+                tab_idx = 0
+                
+                if html_sp_file:
+                    with tabs[tab_idx]:
+                        st.markdown(f"### Relatório SP ({len(res_sp)} itens processados)")
+                        df_sp = pd.DataFrame(res_sp)
+                        st.dataframe(df_sp, use_container_width=True)
+                        prob_sp = sum(1 for r in res_sp if "❌" in r["Status"] or "⚠️" in r["Status"])
+                        if prob_sp == 0:
+                            st.success("✅ Nenhum erro real encontrado em SP!")
+                        else:
+                            st.error(f"⚠️ Foram encontrados {prob_sp} problemas reais em SP.")
+                    tab_idx += 1
+
+                if html_rio_file:
+                    with tabs[tab_idx]:
+                        st.markdown(f"### Relatório Rio ({len(res_rio)} itens processados)")
+                        df_rio = pd.DataFrame(res_rio)
+                        st.dataframe(df_rio, use_container_width=True)
+                        prob_rio = sum(1 for r in res_rio if "❌" in r["Status"] or "⚠️" in r["Status"])
+                        if prob_rio == 0:
+                            st.success("✅ Nenhum erro real encontrado no Rio!")
+                        else:
+                            st.error(f"⚠️️ Foram encontrados {prob_rio} problemas reais no Rio.")
+            else:
+                st.warning("Carrege pelo menos um ficheiro HTML para realizar a validação.")
+    else:
+        st.warning("Por favor, faça o upload da Planilha Excel e de pelo menos um dos ficheiros HTML.")
