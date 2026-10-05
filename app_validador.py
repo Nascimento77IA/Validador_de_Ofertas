@@ -68,7 +68,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 Validador Inteligente com Auditoria de Desconto (Regra Comercial)")
+st.title("🎯 Validador com Auditoria de Desconto (Regra Comercial)")
 st.markdown("Valida preços por PLU, trata os traços (-) e audita as percentagens de desconto considerando fórmulas e arredondamento comercial.")
 
 # --- INTERFACE DO UTILIZADOR ---
